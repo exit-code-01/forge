@@ -1,0 +1,25 @@
+# Build trees
+build/
+build-*/
+
+# Root symlink CMake drops for clangd/clang-tidy
+/compile_commands.json
+
+# clangd index cache
+.cache/
+
+# Editor / IDE
+.vscode/*
+!.vscode/settings.json
+!.vscode/launch.json
+.idea/
+CMakeUserPresets.json
+
+# OS junk
+.DS_Store
+Thumbs.db
+
+# Editor swap files
+*.swp
+*.swo
+*~

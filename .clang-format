@@ -1,0 +1,12 @@
+# .clang-format — canonical, adjudicated 2026-07-02
+# Decision (ADR-005): no AlignConsecutive* — pretty columns aren't worth the
+# multi-line diff churn and git-blame pollution they cause over a long project.
+BasedOnStyle: LLVM
+IndentWidth: 4
+ColumnLimit: 100
+PointerAlignment: Left
+AllowShortFunctionsOnASingleLine: All
+NamespaceIndentation: None
+FixNamespaceComments: true
+IncludeBlocks: Preserve
+AccessModifierOffset: -4

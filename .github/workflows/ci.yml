@@ -1,0 +1,52 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build:
+    name: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # GLFW's X11/Wayland backends won't compile without these dev packages.
+      - name: Install GLFW build deps (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xorg-dev libwayland-dev libxkbcommon-dev wayland-protocols
+
+      - name: Install Ninja
+        uses: seanmiddleditch/gha-setup-ninja@v5
+
+      # MSVC's cl.exe isn't on PATH by default; Ninja needs it on Windows.
+      # Pinned to a commit SHA (supply-chain hardening); comment tracks the tag.
+      - name: Set up MSVC
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
+
+      - name: Configure
+        run: cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: cmake --build build --config Release -j
+
+      # The sandbox opens a window and loops; on headless CI it can't exit 0,
+      # so the smoke scripts accept exit 0 OR a graceful "glfwInit failed" exit 1.
+      # Ninja is single-config everywhere, so the binary path is uniform.
+      - name: Smoke test (POSIX)
+        if: runner.os != 'Windows'
+        run: bash ci/run_sandbox.sh
+
+      - name: Smoke test (Windows)
+        if: runner.os == 'Windows'
+        run: pwsh ci/run_sandbox.ps1
