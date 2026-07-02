@@ -44,3 +44,33 @@ includes GLFW headers, and it does so under `#define GLFW_INCLUDE_NONE` (GLFW's
 default of pulling in system OpenGL headers breaks on Vulkan-only machines that
 lack `GL/gl.h`; the define is mandatory anywhere GLFW is included). Swapping to
 SDL2 later would touch exactly one translation unit, not the whole codebase.
+
+## ADR-005 — No `AlignConsecutive*` formatting; code conforms to the tool
+
+Our canonical `.clang-format` deliberately leaves `AlignConsecutiveAssignments`
+and `AlignConsecutiveDeclarations` off. Column-aligning consecutive `=` signs or
+declarations looks tidy, but editing one line in an aligned block re-spaces its
+neighbours, turning a one-line change into a multi-line diff that pollutes
+`git blame` — a real cost over an 18–30 month project where blame is a debugging
+tool, not decoration. So the formatter stays boring and the code conforms to the
+tool rather than the reverse: no hand-aligned columns for clang-format to fight.
+The rule and this rationale are cross-referenced in the header comment of
+`.clang-format` itself, which is the canonical source. (Process note: an ADR
+number only exists once it is a row in this file — referencing a number
+elsewhere without logging it here is the violation that created this entry's
+retroactive gap.)
+
+## ADR-006 — Input: per-window state, latched edges, GLFW-mirrored keycodes
+
+Input lives as per-window `forge::Input` state that GLFW callbacks write into
+(via the window user-pointer) and game/editor code reads through `window.input()`.
+Edge detection uses per-frame *latches* rather than the classic current-vs-previous
+array diff: a press/release sets a flag that survives until the next `newFrame()`,
+so a key tapped and released within a single frame is never lost — the diff
+approach silently drops those sub-frame taps. `forge::Key` values numerically
+mirror GLFW's keycodes 1:1, eliminating a translation table; the pairing is
+enforced by `static_assert`s in `Input.cpp`, so a GLFW renumbering becomes a
+compile error instead of a runtime bug. `GLFW_REPEAT` is deliberately ignored:
+OS key-repeat is a text-input concern (a P7 char-callback matter), not gameplay
+input — which is exactly why holding a key logs once through `wasKeyPressed` but
+continuously through `isKeyDown`.

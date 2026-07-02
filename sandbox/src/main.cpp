@@ -1,8 +1,6 @@
-// sandbox/src/main.cpp
+// sandbox/src/main.cpp — P1.2 input demo
 //
-// The sandbox is a CONSUMER of the engine — public headers only.
-// Note what's absent: no GLFW include, no raw pointers, no manual cleanup.
-// The Window destructor tears everything down when main() returns.
+// Still zero GLFW here: keys and buttons arrive through forge:: types only.
 
 #include "forge/forge.hpp"
 #include "forge/platform/Window.hpp"
@@ -15,14 +13,31 @@ int main() {
 
     try {
         forge::Window window({.title = "Forge Sandbox", .width = 1280, .height = 720});
+        auto& input = window.input();
 
-        // The main loop. Everything the engine ever does happens in here.
         while (!window.shouldClose()) {
             window.pollEvents();
-            if (window.isKeyDown(forge::Key::Escape)) {
+
+            if (input.wasKeyPressed(forge::Key::Escape)) {
                 window.requestClose();
             }
-            // P2 inserts here: renderer.beginFrame() / draw / present
+
+            // Edge vs state, demonstrated: SPACE logs ONCE per tap even if
+            // held; WASD logs continuously while down.
+            if (input.wasKeyPressed(forge::Key::Space)) {
+                FORGE_INFO("space tapped at cursor ({:.0f}, {:.0f})", input.mouseX(),
+                           input.mouseY());
+            }
+            if (input.isKeyDown(forge::Key::W)) {
+                FORGE_TRACE("W held");
+            }
+
+            if (input.wasMousePressed(forge::MouseButton::Left)) {
+                FORGE_INFO("click at ({:.0f}, {:.0f})", input.mouseX(), input.mouseY());
+            }
+            if (input.scrollDeltaY() != 0.0) {
+                FORGE_INFO("scroll {:+.1f}", input.scrollDeltaY());
+            }
         }
     } catch (const std::exception& e) {
         FORGE_ERROR("fatal: {}", e.what());

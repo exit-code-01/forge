@@ -21,12 +21,11 @@ void glfwErrorCallback(int code, const char* description) {
     FORGE_ERROR("GLFW error {}: {}", code, description);
 }
 
-int toGlfwKey(Key key) {
-    switch (key) {
-    case Key::Escape:
-        return GLFW_KEY_ESCAPE;
-    }
-    return GLFW_KEY_UNKNOWN;
+// Route a GLFW callback back to the owning Window's Input.
+// The user pointer is set in the ctor; GLFW guarantees these callbacks fire
+// on the main thread inside glfwPollEvents().
+Input& inputOf(GLFWwindow* handle) {
+    return static_cast<Window*>(glfwGetWindowUserPointer(handle))->input();
 }
 
 } // namespace
@@ -61,6 +60,18 @@ Window::Window(const WindowDesc& desc) {
     m_width = static_cast<uint32_t>(fbWidth);
     m_height = static_cast<uint32_t>(fbHeight);
 
+    glfwSetWindowUserPointer(m_handle, this);
+    glfwSetKeyCallback(m_handle, [](GLFWwindow* w, int key, int, int action, int) {
+        inputOf(w).onKey(key, action);
+    });
+    glfwSetMouseButtonCallback(m_handle, [](GLFWwindow* w, int button, int action, int) {
+        inputOf(w).onMouseButton(button, action);
+    });
+    glfwSetCursorPosCallback(
+        m_handle, [](GLFWwindow* w, double x, double y) { inputOf(w).onCursorPos(x, y); });
+    glfwSetScrollCallback(m_handle,
+                          [](GLFWwindow* w, double dx, double dy) { inputOf(w).onScroll(dx, dy); });
+
     FORGE_INFO("window created: \"{}\" {}x{} (framebuffer {}x{})", desc.title, desc.width,
                desc.height, m_width, m_height);
 }
@@ -73,12 +84,13 @@ Window::~Window() {
     }
 }
 
-void Window::pollEvents() { glfwPollEvents(); }
+void Window::pollEvents() {
+    m_input.newFrame(); // clear latches/deltas first, THEN let events repopulate
+    glfwPollEvents();
+}
 
 bool Window::shouldClose() const { return glfwWindowShouldClose(m_handle) == GLFW_TRUE; }
 
 void Window::requestClose() { glfwSetWindowShouldClose(m_handle, GLFW_TRUE); }
-
-bool Window::isKeyDown(Key key) const { return glfwGetKey(m_handle, toGlfwKey(key)) == GLFW_PRESS; }
 
 } // namespace forge

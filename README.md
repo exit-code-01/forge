@@ -34,7 +34,7 @@ sudo apt install xorg-dev libwayland-dev libxkbcommon-dev wayland-protocols
 ## Roadmap
 
 - **P0** Scope, repo, CMake build system — ✅ done
-- **P1** Platform layer: window, input, logging, math, ECS core — 🚧 in progress
+- **P1** Platform layer: window, input, logging, math, ECS core — 🚧 window + input done; logger, ECS remaining
 - **P2** Renderer core: Vulkan init, swapchain, first triangle
 - **P3** PBR forward renderer: texturing, basic lighting/shadows
 - **P4** Physics: Jolt integration, collision, rigidbodies
@@ -47,4 +47,5 @@ sudo apt install xorg-dev libwayland-dev libxkbcommon-dev wayland-protocols
 
 ## Status
 
-P1 in progress — sandbox opens a window and shuts down cleanly on ESC.
+P1 in progress — window + input landed (latched edge detection, GLFW-mirrored
+keycodes). Logger backend and ECS core still to come.

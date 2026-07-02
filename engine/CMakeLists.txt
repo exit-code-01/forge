@@ -2,6 +2,7 @@
 add_library(forge_engine STATIC
     src/core/Log.cpp
     src/platform/Window.cpp
+    src/platform/Input.cpp
 )
 add_library(forge::engine ALIAS forge_engine)  # consumers use the namespaced name
 

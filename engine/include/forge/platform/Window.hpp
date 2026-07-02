@@ -15,6 +15,8 @@
 
 #pragma once
 
+#include "forge/platform/Input.hpp"
+
 #include <cstdint>
 #include <string>
 
@@ -27,10 +29,6 @@ struct WindowDesc {
     uint32_t width = 1280;
     uint32_t height = 720;
 };
-
-// Placeholder input surface. P1.2 replaces this with a real Input system and
-// full key enum; sandbox call sites (`isKeyDown(Key::Escape)`) stay valid.
-enum class Key { Escape };
 
 class Window {
 public:
@@ -46,7 +44,9 @@ public:
     [[nodiscard]] bool shouldClose() const;
     void requestClose();
 
-    [[nodiscard]] bool isKeyDown(Key key) const;
+    // Input state for this window, valid between pollEvents() calls.
+    [[nodiscard]] Input& input() { return m_input; }
+    [[nodiscard]] const Input& input() const { return m_input; }
 
     [[nodiscard]] uint32_t width() const { return m_width; }
     [[nodiscard]] uint32_t height() const { return m_height; }
@@ -56,6 +56,7 @@ public:
 
 private:
     GLFWwindow* m_handle = nullptr;
+    Input m_input;
     uint32_t m_width = 0;
     uint32_t m_height = 0;
 };
