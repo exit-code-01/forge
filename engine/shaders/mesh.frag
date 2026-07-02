@@ -5,6 +5,7 @@
 
 layout(location = 0) in vec3 vWorldPos;
 layout(location = 1) in vec3 vWorldNormal;
+layout(location = 2) in vec2 vUv;
 
 layout(set = 0, binding = 0) uniform FrameData {
     mat4 viewProj;
@@ -14,9 +15,10 @@ layout(set = 0, binding = 0) uniform FrameData {
 }
 frame;
 
+layout(set = 0, binding = 1) uniform sampler2D uAlbedo;
+
 layout(location = 0) out vec4 outColor;
 
-const vec3 kAlbedo = vec3(0.85, 0.25, 0.08);
 const float kMetallic = 0.15;
 const float kRoughness = 0.35;
 const float kPi = 3.14159265359;
@@ -42,6 +44,9 @@ vec3 fresnelSchlick(float cosTheta, vec3 f0) {
 }
 
 void main() {
+    // _SRGB format: the sampler hands us LINEAR albedo, no manual pow(2.2).
+    vec3 albedo = texture(uAlbedo, vUv).rgb;
+
     vec3 n = normalize(vWorldNormal);
     vec3 v = normalize(frame.cameraPos.xyz - vWorldPos);
     vec3 l = normalize(frame.lightDirection.xyz);
@@ -52,7 +57,7 @@ void main() {
     float ndoth = max(dot(n, h), 0.0);
 
     // Metals tint their reflection with albedo; dielectrics reflect ~4% white.
-    vec3 f0 = mix(vec3(0.04), kAlbedo, kMetallic);
+    vec3 f0 = mix(vec3(0.04), albedo, kMetallic);
 
     float d = distributionGGX(ndoth, kRoughness);
     float g = geometrySchlickGGX(ndotv, kRoughness) * geometrySchlickGGX(ndotl, kRoughness);
@@ -62,9 +67,9 @@ void main() {
     // Energy conservation: light is either reflected (kS=f) or refracted
     // into diffuse — and metals have no diffuse at all.
     vec3 kd = (vec3(1.0) - f) * (1.0 - kMetallic);
-    vec3 direct = (kd * kAlbedo / kPi + specular) * frame.lightColor.rgb * ndotl;
+    vec3 direct = (kd * albedo / kPi + specular) * frame.lightColor.rgb * ndotl;
 
-    vec3 ambient = vec3(0.03) * kAlbedo; // flat ambient until IBL/shadows (P3.3)
+    vec3 ambient = vec3(0.03) * albedo; // flat ambient until IBL/shadows (P3.3)
     vec3 color = direct + ambient;
     color = color / (color + vec3(1.0)); // Reinhard: HDR light -> displayable range
 

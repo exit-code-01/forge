@@ -104,12 +104,7 @@ void GpuBuffer::writeBytes(const void* src, size_t byteCount) {
     // request it. If that ever changes, flush here — not at call sites.
 }
 
-void uploadToBuffer(const VulkanDevice& device, VkCommandPool pool, VkBuffer dst, const void* data,
-                    VkDeviceSize byteCount) {
-    GpuBuffer staging(device, byteCount, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-                      VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
-    staging.writeBytes(data, byteCount);
-
+VkCommandBuffer beginOneShot(const VulkanDevice& device, VkCommandPool pool) {
     VkCommandBufferAllocateInfo allocInfo{};
     allocInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
     allocInfo.commandPool = pool;
@@ -122,10 +117,11 @@ void uploadToBuffer(const VulkanDevice& device, VkCommandPool pool, VkBuffer dst
     beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
     beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
     vkBeginCommandBuffer(cmd, &beginInfo);
-    const VkBufferCopy region{0, 0, byteCount};
-    vkCmdCopyBuffer(cmd, staging.handle(), dst, 1, &region);
-    vkEndCommandBuffer(cmd);
+    return cmd;
+}
 
+void endOneShot(const VulkanDevice& device, VkCommandPool pool, VkCommandBuffer cmd) {
+    vkEndCommandBuffer(cmd);
     VkSubmitInfo submit{};
     submit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
     submit.commandBufferCount = 1;
@@ -133,6 +129,18 @@ void uploadToBuffer(const VulkanDevice& device, VkCommandPool pool, VkBuffer dst
     vkQueueSubmit(device.graphicsQueue(), 1, &submit, VK_NULL_HANDLE);
     vkQueueWaitIdle(device.graphicsQueue()); // blocking — load-time only, by contract
     vkFreeCommandBuffers(device.device(), pool, 1, &cmd);
+}
+
+void uploadToBuffer(const VulkanDevice& device, VkCommandPool pool, VkBuffer dst, const void* data,
+                    VkDeviceSize byteCount) {
+    GpuBuffer staging(device, byteCount, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+                      VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+    staging.writeBytes(data, byteCount);
+
+    const VkCommandBuffer cmd = beginOneShot(device, pool);
+    const VkBufferCopy region{0, 0, byteCount};
+    vkCmdCopyBuffer(cmd, staging.handle(), dst, 1, &region);
+    endOneShot(device, pool, cmd);
 }
 
 } // namespace forge

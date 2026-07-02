@@ -186,3 +186,22 @@ derivation of CLOCKWISE shipped an inside-out cube) is set in exactly one
 pipeline. Apps hand the engine a `Camera` and never learn Vulkan's axes.
 Allocation stays raw vkAllocateMemory per buffer; VMA is the documented
 trigger point when P5 asset streaming multiplies allocation counts.
+
+## ADR-013 — Texturing lands before image loading: procedural placeholder, stb deferred
+
+P3.2 builds the complete texture pipeline — `VkImage` + staging upload, a
+GPU-side `vkCmdBlitImage` mip cascade, trilinear `VkSampler`, combined-image-
+sampler descriptor — but feeds it a *procedurally generated* checkerboard, the
+engine's built-in placeholder albedo. stb_image is deliberately NOT added yet:
+ADR-003 says a dependency arrives with its first real consumer, and decoding
+PNGs is P5's job (asset import), not P3's. The lesson of P3.2 is the
+*machinery*, which is byte-identical whether texels come from a generator or a
+file; deferring stb also keeps CI free of file-path/asset questions. Format
+policy: albedo is `R8G8B8A8_SRGB`, so the hardware linearizes on sample and
+the shader never hand-rolls `pow(2.2)` — the same "sRGB at the edges, linear
+math inside" rule the swapchain already follows. Mips are generated at upload
+(blit each level from the one above) rather than shipped, fine for generated
+and P5-era imported textures alike until a real asset cooker exists. Sampler
+anisotropy is off because it is a device *feature* we have not requested;
+that request belongs with P5's oblique-floor test scenes, where it earns its
+cost visibly.

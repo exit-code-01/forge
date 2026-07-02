@@ -16,6 +16,7 @@ add_library(forge_engine STATIC
     src/renderer/VulkanDevice.cpp
     src/renderer/VulkanSwapchain.cpp
     src/renderer/VulkanBuffer.cpp
+    src/renderer/VulkanTexture.cpp
     src/renderer/Renderer.cpp
 )
 add_library(forge::engine ALIAS forge_engine)  # consumers use the namespaced name

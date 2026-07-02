@@ -12,6 +12,7 @@
 #pragma once
 
 #include <glm/mat4x4.hpp>
+#include <glm/vec2.hpp>
 #include <glm/vec3.hpp>
 
 #include <cstdint>
@@ -34,11 +35,12 @@ struct Camera {
     float farPlane = 100.0f;
 };
 
-// P3 vertex: position + normal. UVs arrive with texturing (P3.2), tangents
-// with normal mapping — the layout is versioned by the engine, not the app.
+// P3 vertex: position + normal + uv. Tangents arrive with normal mapping —
+// the layout is versioned by the engine, not the app.
 struct Vertex {
     glm::vec3 position;
     glm::vec3 normal;
+    glm::vec2 uv;
 };
 
 class Renderer {

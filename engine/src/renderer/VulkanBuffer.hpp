@@ -45,6 +45,12 @@ private:
     void* m_mapped = nullptr;
 };
 
+// One-shot command buffer pair for load-time GPU work (uploads, mip blits).
+// endOneShot submits, BLOCKS until idle, and frees — load-time only, by
+// contract.
+[[nodiscard]] VkCommandBuffer beginOneShot(const VulkanDevice& device, VkCommandPool pool);
+void endOneShot(const VulkanDevice& device, VkCommandPool pool, VkCommandBuffer cmd);
+
 // Blocking one-shot copy into a device-local buffer via a throwaway staging
 // buffer. Fine at LOAD time (mesh upload); never call this per frame.
 void uploadToBuffer(const VulkanDevice& device, VkCommandPool pool, VkBuffer dst, const void* data,

@@ -61,10 +61,10 @@ void ecsDemo() {
 void appendFace(std::vector<forge::Vertex>& vertices, std::vector<uint32_t>& indices, glm::vec3 n,
                 glm::vec3 u, glm::vec3 v) {
     const auto base = static_cast<uint32_t>(vertices.size());
-    vertices.push_back({(n - u - v) * 0.5f, n});
-    vertices.push_back({(n + u - v) * 0.5f, n});
-    vertices.push_back({(n + u + v) * 0.5f, n});
-    vertices.push_back({(n - u + v) * 0.5f, n});
+    vertices.push_back({(n - u - v) * 0.5f, n, {0.0f, 1.0f}});
+    vertices.push_back({(n + u - v) * 0.5f, n, {1.0f, 1.0f}});
+    vertices.push_back({(n + u + v) * 0.5f, n, {1.0f, 0.0f}});
+    vertices.push_back({(n - u + v) * 0.5f, n, {0.0f, 0.0f}});
     indices.insert(indices.end(), {base, base + 1, base + 2, base + 2, base + 3, base});
 }
 

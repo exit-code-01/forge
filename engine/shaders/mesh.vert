@@ -4,6 +4,7 @@
 
 layout(location = 0) in vec3 inPosition;
 layout(location = 1) in vec3 inNormal;
+layout(location = 2) in vec2 inUv;
 
 layout(set = 0, binding = 0) uniform FrameData {
     mat4 viewProj;
@@ -18,12 +19,15 @@ push;
 
 layout(location = 0) out vec3 vWorldPos;
 layout(location = 1) out vec3 vWorldNormal;
+layout(location = 2) out vec2 vUv;
 
 void main() {
     vec4 world = push.model * vec4(inPosition, 1.0);
     vWorldPos = world.xyz;
     // mat3(model) is only correct for uniform scale; non-uniform needs the
     // inverse-transpose (revisit when the transform system exists, P4-ish).
+    // Axis-aligned normals under axis-aligned scale survive the normalize().
     vWorldNormal = mat3(push.model) * inNormal;
+    vUv = inUv;
     gl_Position = frame.viewProj * world;
 }

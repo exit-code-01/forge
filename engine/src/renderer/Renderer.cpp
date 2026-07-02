@@ -3,6 +3,7 @@
 #include "VulkanCommon.hpp" // volk first: gives glfw3.h the Vulkan types below
 #include "VulkanDevice.hpp"
 #include "VulkanSwapchain.hpp"
+#include "VulkanTexture.hpp"
 
 #include "forge/core/Log.hpp"
 #include "forge/platform/Window.hpp"
@@ -89,29 +90,35 @@ bool formatHasStencil(VkFormat format) {
     return format == VK_FORMAT_D32_SFLOAT_S8_UINT || format == VK_FORMAT_D24_UNORM_S8_UINT;
 }
 
-// Sync2 image-layout transition, the only barrier shape P2/P3 need.
+// Whole-image transition; the mip-aware version lives in vkutil (shared with
+// VulkanTexture's mip-generation cascade).
 void transitionImage(VkCommandBuffer cmd, VkImage image, VkImageAspectFlags aspect,
                      VkImageLayout from, VkImageLayout to, VkPipelineStageFlags2 srcStage,
                      VkAccessFlags2 srcAccess, VkPipelineStageFlags2 dstStage,
                      VkAccessFlags2 dstAccess) {
-    VkImageMemoryBarrier2 barrier{};
-    barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
-    barrier.srcStageMask = srcStage;
-    barrier.srcAccessMask = srcAccess;
-    barrier.dstStageMask = dstStage;
-    barrier.dstAccessMask = dstAccess;
-    barrier.oldLayout = from;
-    barrier.newLayout = to;
-    barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    barrier.image = image;
-    barrier.subresourceRange = {aspect, 0, 1, 0, 1};
+    vkutil::transitionImage(cmd, image, aspect, 0, VK_REMAINING_MIP_LEVELS, from, to, srcStage,
+                            srcAccess, dstStage, dstAccess);
+}
 
-    VkDependencyInfo dep{};
-    dep.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
-    dep.imageMemoryBarrierCount = 1;
-    dep.pImageMemoryBarriers = &barrier;
-    vkCmdPipelineBarrier2(cmd, &dep);
+// The engine's built-in placeholder albedo (ADR-013): an 8x8 checker in warm
+// orange / off-white, generated at startup. stb_image + real files are P5's
+// job; the sampling machinery is identical either way.
+std::vector<uint8_t> makeCheckerTexels(uint32_t size, uint32_t checkSize) {
+    std::vector<uint8_t> texels(static_cast<size_t>(size) * size * 4);
+    constexpr uint8_t kA[4] = {235, 137, 66, 255};  // warm orange (sRGB)
+    constexpr uint8_t kB[4] = {240, 236, 228, 255}; // off-white (sRGB)
+    for (uint32_t y = 0; y < size; ++y) {
+        for (uint32_t x = 0; x < size; ++x) {
+            const bool odd = (((x / checkSize) + (y / checkSize)) & 1u) != 0;
+            const uint8_t* c = odd ? kA : kB;
+            uint8_t* dst = &texels[(static_cast<size_t>(y) * size + x) * 4];
+            dst[0] = c[0];
+            dst[1] = c[1];
+            dst[2] = c[2];
+            dst[3] = c[3];
+        }
+    }
+    return texels;
 }
 
 } // namespace
@@ -134,6 +141,9 @@ struct Renderer::Impl {
     VkDescriptorPool descriptorPool = VK_NULL_HANDLE;
     std::array<VkDescriptorSet, kFramesInFlight> descriptorSets{};
     std::array<GpuBuffer, kFramesInFlight> frameUbos;
+
+    // Built-in placeholder albedo until P5 brings real assets (ADR-013).
+    std::unique_ptr<VulkanTexture> albedoTexture;
 
     VkPipelineLayout pipelineLayout = VK_NULL_HANDLE;
     VkPipeline pipeline = VK_NULL_HANDLE;
@@ -241,28 +251,32 @@ void Renderer::Impl::destroyDepthResources() {
 void Renderer::Impl::createDescriptors() {
     const VkDevice dev = device->device();
 
-    // One binding: the per-frame UBO, visible to both stages.
-    VkDescriptorSetLayoutBinding binding{};
-    binding.binding = 0;
-    binding.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-    binding.descriptorCount = 1;
-    binding.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
+    // Binding 0: per-frame UBO (both stages). Binding 1: albedo texture.
+    VkDescriptorSetLayoutBinding bindings[2]{};
+    bindings[0].binding = 0;
+    bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    bindings[0].descriptorCount = 1;
+    bindings[0].stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
+    bindings[1].binding = 1;
+    bindings[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    bindings[1].descriptorCount = 1;
+    bindings[1].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
     VkDescriptorSetLayoutCreateInfo layoutInfo{};
     layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-    layoutInfo.bindingCount = 1;
-    layoutInfo.pBindings = &binding;
+    layoutInfo.bindingCount = 2;
+    layoutInfo.pBindings = bindings;
     if (vkCreateDescriptorSetLayout(dev, &layoutInfo, nullptr, &descriptorLayout) != VK_SUCCESS) {
         throw std::runtime_error("vkCreateDescriptorSetLayout failed");
     }
 
-    VkDescriptorPoolSize poolSize{};
-    poolSize.type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-    poolSize.descriptorCount = kFramesInFlight;
+    VkDescriptorPoolSize poolSizes[2]{};
+    poolSizes[0] = {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, kFramesInFlight};
+    poolSizes[1] = {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, kFramesInFlight};
     VkDescriptorPoolCreateInfo poolInfo{};
     poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
     poolInfo.maxSets = kFramesInFlight;
-    poolInfo.poolSizeCount = 1;
-    poolInfo.pPoolSizes = &poolSize;
+    poolInfo.poolSizeCount = 2;
+    poolInfo.pPoolSizes = poolSizes;
     if (vkCreateDescriptorPool(dev, &poolInfo, nullptr, &descriptorPool) != VK_SUCCESS) {
         throw std::runtime_error("vkCreateDescriptorPool failed");
     }
@@ -285,14 +299,22 @@ void Renderer::Impl::createDescriptors() {
             GpuBuffer(*device, sizeof(FrameUbo), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
                       VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
         VkDescriptorBufferInfo bufferInfo{frameUbos[i].handle(), 0, sizeof(FrameUbo)};
-        VkWriteDescriptorSet write{};
-        write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        write.dstSet = descriptorSets[i];
-        write.dstBinding = 0;
-        write.descriptorCount = 1;
-        write.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-        write.pBufferInfo = &bufferInfo;
-        vkUpdateDescriptorSets(dev, 1, &write, 0, nullptr);
+        VkDescriptorImageInfo imageInfo{albedoTexture->sampler(), albedoTexture->view(),
+                                        VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+        VkWriteDescriptorSet writes[2]{};
+        writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[0].dstSet = descriptorSets[i];
+        writes[0].dstBinding = 0;
+        writes[0].descriptorCount = 1;
+        writes[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        writes[0].pBufferInfo = &bufferInfo;
+        writes[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[1].dstSet = descriptorSets[i];
+        writes[1].dstBinding = 1;
+        writes[1].descriptorCount = 1;
+        writes[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        writes[1].pImageInfo = &imageInfo;
+        vkUpdateDescriptorSets(dev, 2, writes, 0, nullptr);
     }
 }
 
@@ -318,14 +340,15 @@ void Renderer::Impl::createPipeline() {
     bindingDesc.binding = 0;
     bindingDesc.stride = sizeof(Vertex);
     bindingDesc.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
-    VkVertexInputAttributeDescription attributes[2]{};
+    VkVertexInputAttributeDescription attributes[3]{};
     attributes[0] = {0, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(Vertex, position)};
     attributes[1] = {1, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(Vertex, normal)};
+    attributes[2] = {2, 0, VK_FORMAT_R32G32_SFLOAT, offsetof(Vertex, uv)};
     VkPipelineVertexInputStateCreateInfo vertexInput{};
     vertexInput.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
     vertexInput.vertexBindingDescriptionCount = 1;
     vertexInput.pVertexBindingDescriptions = &bindingDesc;
-    vertexInput.vertexAttributeDescriptionCount = 2;
+    vertexInput.vertexAttributeDescriptionCount = 3;
     vertexInput.pVertexAttributeDescriptions = attributes;
 
     VkPipelineInputAssemblyStateCreateInfo inputAssembly{};
@@ -579,10 +602,13 @@ Renderer::Renderer(Window& window, VulkanContext& context)
     m_impl->swapchain = std::make_unique<VulkanSwapchain>(*m_impl->device, m_impl->surface,
                                                           extent.width, extent.height);
     m_impl->createDepthResources();
+    m_impl->createFrameObjects(); // command pool first: texture upload needs it
+    m_impl->albedoTexture = std::make_unique<VulkanTexture>(*m_impl->device, m_impl->commandPool,
+                                                            256, 256, makeCheckerTexels(256, 32));
     m_impl->createDescriptors();
     m_impl->createPipeline();
-    m_impl->createFrameObjects();
-    FORGE_INFO("renderer ready: dynamic rendering, depth {}, {} frames in flight",
+    FORGE_INFO("renderer ready: dynamic rendering, depth {}, {} frames in flight, "
+               "256x256 checker albedo (9 mips)",
                m_impl->depthFormat == VK_FORMAT_D32_SFLOAT ? "D32_SFLOAT" : "D+S fallback",
                kFramesInFlight);
 }
@@ -603,6 +629,7 @@ Renderer::~Renderer() {
         vkDestroyPipelineLayout(dev, m_impl->pipelineLayout, nullptr);
         vkDestroyDescriptorPool(dev, m_impl->descriptorPool, nullptr); // frees the sets
         vkDestroyDescriptorSetLayout(dev, m_impl->descriptorLayout, nullptr);
+        m_impl->albedoTexture.reset();
         m_impl->vertexBuffer = GpuBuffer{};
         m_impl->indexBuffer = GpuBuffer{};
         for (auto& ubo : m_impl->frameUbos) {
