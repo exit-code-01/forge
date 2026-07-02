@@ -91,3 +91,22 @@ redirected, so log files stay plain text; (3) the mutex wraps only the final
 tiny cost of serializing the write. `std::format` (C++20) means no `printf`
 format-string/argument mismatches — the compiler checks them. A file/async sink
 is a P5+ concern; it will be another `write()` implementation, not an API change.
+
+## ADR-008 — ECS: sparse-set storage with generational entity handles
+
+The ECS uses sparse-set storage (the EnTT family, sized for readability over
+raw speed): each component type `T` gets a `Pool<T>` holding a big holey `sparse`
+array (entity index → dense slot) and two small packed arrays (`dense` entity
+indices + parallel `data`). Iterating "every Transform" therefore walks one
+contiguous array — the cache behavior that is the whole reason ECS exists.
+Removal is O(1) swap-and-pop, which is *why* iteration order is unspecified and
+why you must never remove a component from inside an `each()` over that same
+pool. An `Entity` is not an object but a handle: a 32-bit slot index plus a 32-bit
+generation counter. Destroying an entity bumps its slot's generation, so every
+outstanding handle to that slot becomes detectably stale (`alive()` returns
+false) instead of silently aliasing the slot's next occupant — the ABA bug made
+impossible by construction. Freed indices are recycled to keep the arrays dense.
+Threading is intentionally absent: the registry is single-threaded until systems
+exist (P4+), at which point parallelism happens *across* systems, not inside the
+registry. The two-component `each<A,B>()` walks A and filters by B; picking the
+smaller pool to drive is a P4 optimization the API is already shaped to absorb.
