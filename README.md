@@ -37,7 +37,7 @@ sudo apt install xorg-dev libwayland-dev libxkbcommon-dev wayland-protocols
 - **P1** Platform layer: window, input, logging, math, ECS core — ✅ done
 - **P2** Renderer core: Vulkan init, swapchain, first triangle — ✅ done
 - **P3** PBR forward renderer: texturing, basic lighting/shadows — ✅ done
-- **P4** Physics: Jolt integration, collision, rigidbodies
+- **P4** Physics: Jolt integration, collision, rigidbodies — ✅ done
 - **P5** Asset pipeline: model/texture import, hot reload
 - **P6** Scripting: Lua bindings
 - **P7** Editor: scene hierarchy, inspector, gizmos (Dear ImGui)
@@ -47,11 +47,13 @@ sudo apt install xorg-dev libwayland-dev libxkbcommon-dev wayland-protocols
 
 ## Status
 
-P3 complete — the forward renderer stands: Cook-Torrance PBR with a
-directional light, mip-mapped sRGB texturing (built-in checker albedo until
-P5's asset import), and 2048² PCF shadow mapping via a depth-only pre-pass.
-A textured cube spins over a ground slab and casts a soft shadow, with zero
-validation-layer complaints. Next: P4 — Jolt physics.
+P4 complete — the world obeys gravity. Jolt v5.2.0 sits behind
+`forge::PhysicsWorld` (fixed 60 Hz stepping, box rigidbodies, restitution),
+physics transforms drive the renderer's model matrices, and the sandbox drops
+the textured cube onto the slab — it falls, bounces, settles at the
+analytically exact height, and SPACE kicks it back into the air. The P3
+renderer draws it all with PCF shadows and zero validation complaints.
+Next: P5 — the asset pipeline (Assimp, stb_image, hot reload).
 
 ## Vulkan SDK
 

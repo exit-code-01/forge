@@ -55,3 +55,33 @@ FetchContent_MakeAvailable(vulkan_headers volk)
 if(TARGET volk AND TARGET Vulkan::Headers)
     target_link_libraries(volk PUBLIC Vulkan::Headers)
 endif()
+
+# ---- Jolt Physics v5.2.0 (P4) — consumed by: engine/src/physics
+# The CMake project lives in Build/, hence SOURCE_SUBDIR. Static lib target
+# is `Jolt`. Version bumps: change the tag AND re-read Build/CMakeLists.txt
+# option defaults — they have changed between releases before.
+set(TARGET_UNIT_TESTS      OFF CACHE BOOL "" FORCE)
+set(TARGET_HELLO_WORLD     OFF CACHE BOOL "" FORCE)
+set(TARGET_PERFORMANCE_TEST OFF CACHE BOOL "" FORCE)
+set(TARGET_SAMPLES         OFF CACHE BOOL "" FORCE)
+set(TARGET_VIEWER          OFF CACHE BOOL "" FORCE)
+set(ENABLE_ALL_WARNINGS    OFF CACHE BOOL "" FORCE)
+# LTO makes dev links crawl; revisit for release packaging (P10).
+set(INTERPROCEDURAL_OPTIMIZATION OFF CACHE BOOL "" FORCE)
+# Jolt defaults to the STATIC MSVC runtime; the rest of our world is /MD.
+# Mixed CRTs are a link-time bomb — force dynamic to match.
+set(USE_STATIC_MSVC_RUNTIME_LIBRARY OFF CACHE BOOL "" FORCE)
+FetchContent_Declare(joltphysics
+    GIT_REPOSITORY https://github.com/jrouwe/JoltPhysics.git
+    GIT_TAG        v5.2.0
+    GIT_SHALLOW    TRUE
+    SOURCE_SUBDIR  Build
+)
+FetchContent_MakeAvailable(joltphysics)
+# Same treatment as glm: Jolt's headers are not ours to warn about.
+if(TARGET Jolt)
+    set_target_properties(Jolt PROPERTIES
+        INTERFACE_SYSTEM_INCLUDE_DIRECTORIES
+        "$<TARGET_PROPERTY:Jolt,INTERFACE_INCLUDE_DIRECTORIES>"
+    )
+endif()

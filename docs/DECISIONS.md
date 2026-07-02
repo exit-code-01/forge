@@ -227,3 +227,27 @@ today; (5) NO Y-flip on the light matrix: the map is rendered and sampled
 through the same matrix, so the convention cancels — only the swapchain path
 flips (ADR-012). Shadows attenuate *direct* light only; ambient survives,
 because a shadow is the absence of one light, not the absence of light.
+
+## ADR-015 — Jolt behind a pimpl seam; fixed 60 Hz steps through an accumulator
+
+Jolt v5.2.0 comes in as pinned FetchContent (`SOURCE_SUBDIR Build` — its CMake
+project is not at repo root), with three build-option overrides that each
+prevent a real failure mode: `USE_STATIC_MSVC_RUNTIME_LIBRARY OFF` (Jolt
+defaults to /MT while the rest of our world is /MD — mixed CRTs are a
+link-time bomb), `INTERPROCEDURAL_OPTIMIZATION OFF` (LTO makes dev links
+crawl; revisit for P10 packaging), and all sample/test/viewer targets off.
+Jolt's headers are SYSTEM includes and the library links PRIVATE: exactly one
+translation unit (`src/physics/PhysicsWorld.cpp`) includes Jolt, the same seam
+discipline as GLFW behind Window and Vulkan behind Renderer — consumers see
+glm types and opaque `BodyId` handles (Jolt's index+sequence packing rides
+inside, so stale handles stay detectable). The collision taxonomy is the
+canonical two-layer minimum (NonMoving/Moving; static-vs-static never reaches
+the narrow phase) — more layers arrive when gameplay needs them, not before.
+Simulation advances in FIXED 1/60 s ticks fed by an accumulator with a 0.1 s
+frame clamp: variable steps make contacts springy and non-deterministic, and
+the clamp turns a debugger pause into one slow frame instead of a 40-tick
+catch-up stampede. Documented consequence (learned the honest way): feeding
+`update()` bulk time simulates LESS than asked — callers step in frame-sized
+slices. Units are meters/kilograms/seconds, Y-up, matching the renderer 1:1.
+Render-side interpolation between ticks is deferred to P8 (invisible at
+60/60); body-capacity caps (1024) are demo-sized and revisited at P10.

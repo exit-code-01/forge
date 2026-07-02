@@ -6,6 +6,7 @@
 
 #include "forge/ecs/Registry.hpp"
 #include "forge/forge.hpp"
+#include "forge/physics/PhysicsWorld.hpp"
 #include "forge/platform/Window.hpp"
 #include "forge/renderer/Renderer.hpp"
 #include "forge/renderer/VulkanContext.hpp"
@@ -57,6 +58,34 @@ void ecsDemo() {
                d.index, d.generation, registry.alive(b));
 }
 
+// Headless physics smoke: proves Jolt init + simulation on ANY machine,
+// including CI runners that never get past glfwInit. A cube dropped from
+// 3 m must fall and come to rest on the slab (top at y = -0.75, so the
+// cube's center settles near -0.25).
+void physicsDemo() {
+    forge::PhysicsWorld physics;
+    physics.addBox({4.0f, 0.1f, 4.0f}, {0.0f, -0.85f, 0.0f}, forge::BodyType::Static);
+    const auto cube =
+        physics.addBox({0.5f, 0.5f, 0.5f}, {0.0f, 3.0f, 0.0f}, forge::BodyType::Dynamic, 0.4f);
+
+    // Feed update() frame-sized time slices, like a real game loop would —
+    // big gulps hit the anti-spiral clamp by design and simulate LESS time
+    // than you asked for (found out the honest way; see the P4 devlog).
+    const auto simulate = [&physics](float seconds) {
+        constexpr float kFrame = 1.0f / 60.0f;
+        for (float t = 0.0f; t < seconds; t += kFrame) {
+            physics.update(kFrame);
+        }
+    };
+
+    const float y0 = physics.bodyTransform(cube)[3].y;
+    simulate(0.75f); // mid-fall
+    const float yMid = physics.bodyTransform(cube)[3].y;
+    simulate(3.0f); // bounced and settled
+    const float yRest = physics.bodyTransform(cube)[3].y;
+    FORGE_INFO("physics drop: y start {:.2f} -> mid-fall {:.2f} -> rest {:.2f}", y0, yMid, yRest);
+}
+
 // Unit cube, 24 vertices (4 per face so normals are hard), 36 indices.
 // Faces are wound CCW seen from OUTSIDE; u cross v == n keeps that true.
 void appendFace(std::vector<forge::Vertex>& vertices, std::vector<uint32_t>& indices, glm::vec3 n,
@@ -88,6 +117,7 @@ int main() {
     FORGE_INFO("Forge Engine v{}.{}.{}", v.major, v.minor, v.patch);
 
     ecsDemo();
+    physicsDemo();
 
     try {
         forge::Window window({.title = "Forge Sandbox", .width = 1280, .height = 720});
@@ -108,16 +138,19 @@ int main() {
             FORGE_WARN("renderer unavailable: {} — running windowed without rendering", e.what());
         }
 
-        // Pulled back and up so both the cube AND its shadow on the ground
-        // slab are in frame.
-        const forge::Camera camera{.position = {3.0f, 2.2f, 3.6f}, .target = {0.0f, -0.3f, 0.0f}};
+        // Physics owns WHERE things are; rendering only asks. The mesh is a
+        // unit cube, so each body's render matrix = bodyTransform * scale(size).
+        forge::PhysicsWorld physics;
+        physics.addBox({4.0f, 0.1f, 4.0f}, {0.0f, -0.85f, 0.0f}, forge::BodyType::Static);
+        const auto cubeBody =
+            physics.addBox({0.5f, 0.5f, 0.5f}, {0.0f, 3.0f, 0.0f}, forge::BodyType::Dynamic, 0.4f);
+        const glm::mat4 groundOffset = glm::translate(glm::mat4(1.0f), {0.0f, -0.85f, 0.0f}) *
+                                       glm::scale(glm::mat4(1.0f), {8.0f, 0.2f, 8.0f});
 
-        // Ground: the same unit-cube mesh, squashed flat. Axis-aligned
-        // normals survive axis-aligned non-uniform scale after normalize().
-        const glm::mat4 groundModel = glm::translate(glm::mat4(1.0f), {0.0f, -0.85f, 0.0f}) *
-                                      glm::scale(glm::mat4(1.0f), {8.0f, 0.1f, 8.0f});
-        const auto startTime = std::chrono::steady_clock::now();
+        // Framed so the full drop (y=3 down to the slab) stays in shot.
+        const forge::Camera camera{.position = {4.2f, 2.6f, 5.2f}, .target = {0.0f, 0.6f, 0.0f}};
 
+        auto lastTime = std::chrono::steady_clock::now();
         auto& input = window.input();
         while (!window.shouldClose()) {
             window.pollEvents();
@@ -125,15 +158,18 @@ int main() {
                 window.requestClose();
             }
             if (input.wasKeyPressed(forge::Key::Space)) {
-                FORGE_INFO("space at ({:.0f}, {:.0f})", input.mouseX(), input.mouseY());
+                // Mass-independent kick: pop the cube up with a little spin-
+                // inducing sideways bias. Wakes it if it fell asleep.
+                physics.addLinearVelocity(cubeBody, {0.6f, 6.0f, 0.4f});
             }
+
+            const auto now = std::chrono::steady_clock::now();
+            const float dt = std::chrono::duration<float>(now - lastTime).count();
+            lastTime = now;
+            physics.update(dt);
+
             if (renderer) {
-                const float t =
-                    std::chrono::duration<float>(std::chrono::steady_clock::now() - startTime)
-                        .count();
-                const glm::mat4 cubeModel =
-                    glm::rotate(glm::mat4(1.0f), t * glm::radians(45.0f), glm::vec3(0, 1, 0));
-                const std::array models{cubeModel, groundModel};
+                const std::array models{physics.bodyTransform(cubeBody), groundOffset};
                 renderer->drawFrame(camera, models);
             }
         }
