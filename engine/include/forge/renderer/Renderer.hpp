@@ -23,6 +23,15 @@ namespace forge {
 
 class Window;
 class VulkanContext;
+class Renderer;
+
+// Engine-internal seam (EditorUi); types are completed only inside the
+// engine's src/ tree — see src/renderer/RendererInternal.hpp.
+namespace internal {
+struct UiRenderHook;
+struct RendererVkInfo;
+RendererVkInfo queryVkInfo(const Renderer& renderer);
+} // namespace internal
 
 // Value-type camera: the app owns WHERE it looks, the renderer owns HOW that
 // becomes clip space (aspect from the live swapchain, Vulkan Y-flip, 0..1
@@ -88,10 +97,16 @@ public:
                        std::span<const uint8_t> rgba);
 
     // Renders and presents one frame: shadow pass over all items, then the
-    // lit scene. Safe to call when minimized (no-op) or with an empty span.
+    // lit scene (then the UI hook, if set). Safe to call when minimized
+    // (no-op) or with an empty span.
     void drawFrame(const Camera& camera, std::span<const DrawItem> items);
 
+    // Engine-internal (EditorUi). nullptr to detach. The hook must outlive
+    // every drawFrame that runs while it is set.
+    void setUiHook(internal::UiRenderHook* hook);
+
 private:
+    friend internal::RendererVkInfo internal::queryVkInfo(const Renderer&);
     struct Impl;
     std::unique_ptr<Impl> m_impl;
 };

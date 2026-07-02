@@ -1,4 +1,5 @@
 // engine/src/renderer/Renderer.cpp
+#include "RendererInternal.hpp"
 #include "VulkanBuffer.hpp"
 #include "VulkanCommon.hpp" // volk first: gives glfw3.h the Vulkan types below
 #include "VulkanDevice.hpp"
@@ -236,6 +237,7 @@ struct Renderer::Impl {
 
     uint32_t frameIndex = 0;
     bool needRecreate = false;
+    internal::UiRenderHook* uiHook = nullptr; // borrowed; EditorUi outlives its use
 
     Impl(Window& win, VulkanContext& ctx) : window(win), context(ctx) {}
 
@@ -848,6 +850,9 @@ void Renderer::Impl::record(VkCommandBuffer cmd, uint32_t imageIndex, uint32_t f
             drawItemMesh(item);
         }
     }
+    if (uiHook != nullptr) {
+        uiHook->record(cmd); // editor UI draws last, over the scene
+    }
     vkCmdEndRendering(cmd);
 
     // Hand the image to the presentation engine.
@@ -1089,5 +1094,23 @@ void Renderer::drawFrame(const Camera& camera, std::span<const DrawItem> items) 
 
     impl.frameIndex = (frame + 1) % kFramesInFlight;
 }
+
+void Renderer::setUiHook(internal::UiRenderHook* hook) { m_impl->uiHook = hook; }
+
+namespace internal {
+RendererVkInfo queryVkInfo(const Renderer& renderer) {
+    const Renderer::Impl& impl = *renderer.m_impl;
+    RendererVkInfo info{};
+    info.instance = impl.context.instance();
+    info.physicalDevice = impl.device->physical();
+    info.device = impl.device->device();
+    info.graphicsQueue = impl.device->graphicsQueue();
+    info.graphicsFamily = impl.device->graphicsFamily();
+    info.colorFormat = impl.swapchain->format();
+    info.depthFormat = impl.depthFormat;
+    info.imageCount = impl.swapchain->imageCount();
+    return info;
+}
+} // namespace internal
 
 } // namespace forge

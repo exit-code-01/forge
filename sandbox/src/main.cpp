@@ -12,6 +12,9 @@
 #include "forge/renderer/Renderer.hpp"
 #include "forge/renderer/VulkanContext.hpp"
 #include "forge/scripting/ScriptEngine.hpp"
+#include "forge/ui/EditorUi.hpp"
+
+#include <imgui.h>
 
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/vec3.hpp>
@@ -190,9 +193,11 @@ int main() {
         // context, context before the window. Do not reorder.
         std::unique_ptr<forge::VulkanContext> vulkan;
         std::unique_ptr<forge::Renderer> renderer;
+        std::unique_ptr<forge::EditorUi> ui; // declared AFTER renderer: dies first
         try {
             vulkan = std::make_unique<forge::VulkanContext>(window.requiredVulkanExtensions());
             renderer = std::make_unique<forge::Renderer>(window, *vulkan);
+            ui = std::make_unique<forge::EditorUi>(window, *renderer);
         } catch (const std::exception& e) {
             FORGE_WARN("renderer unavailable: {} — running windowed without rendering", e.what());
         }
@@ -269,6 +274,17 @@ int main() {
             const auto now = std::chrono::steady_clock::now();
             const float dt = std::chrono::duration<float>(now - lastTime).count();
             lastTime = now;
+
+            if (ui) {
+                ui->beginFrame();
+                ImGui::SetNextWindowPos({12.0f, 12.0f}, ImGuiCond_FirstUseEver);
+                ImGui::Begin("Forge Editor");
+                ImGui::Text("%.1f fps (%.2f ms)", 1.0 / static_cast<double>(dt),
+                            static_cast<double>(dt) * 1000.0);
+                ImGui::TextUnformatted("E: box rain   SPACE: kick (Lua)");
+                ImGui::End();
+            }
+
             script.update(dt);  // gameplay decides first...
             physics.update(dt); // ...then the world reacts
 

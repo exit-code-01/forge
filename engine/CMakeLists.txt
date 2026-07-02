@@ -17,6 +17,7 @@ add_library(forge_engine STATIC
     src/assets/MeshLoader.cpp
     src/assets/ImageLoader.cpp
     src/scripting/ScriptEngine.cpp
+    src/ui/EditorUi.cpp
     src/renderer/VulkanContext.cpp
     src/renderer/VulkanDevice.cpp
     src/renderer/VulkanSwapchain.cpp
@@ -54,6 +55,7 @@ target_link_libraries(forge_engine
         stb             # image import; confined to src/assets (ADR-016)
         lua_static      # scripting VM; confined to src/scripting (ADR-018)
         sol2            # C++ <-> Lua binding layer; same TU
+        imgui_static    # UI lifecycle/backends; confined to src/ui (ADR-019)
     PUBLIC
         glm::glm        # math types will appear in the public API
 )

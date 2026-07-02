@@ -162,3 +162,51 @@ if(TARGET sol2)
         "$<TARGET_PROPERTY:sol2,INTERFACE_INCLUDE_DIRECTORIES>"
     )
 endif()
+
+# ---- Dear ImGui v1.92.8 (P7) — consumed by: engine/src/ui/EditorUi.cpp
+# No CMake project upstream; we build the target: core + the GLFW and
+# Vulkan backends. IMGUI_IMPL_VULKAN_USE_VOLK routes the backend's Vulkan
+# calls through the same volk loader the renderer uses (one dispatch table,
+# no duplicate linkage).
+FetchContent_Declare(imgui
+    GIT_REPOSITORY https://github.com/ocornut/imgui.git
+    GIT_TAG        v1.92.8
+    GIT_SHALLOW    TRUE
+)
+FetchContent_MakeAvailable(imgui)
+add_library(imgui_static STATIC
+    ${imgui_SOURCE_DIR}/imgui.cpp
+    ${imgui_SOURCE_DIR}/imgui_draw.cpp
+    ${imgui_SOURCE_DIR}/imgui_tables.cpp
+    ${imgui_SOURCE_DIR}/imgui_widgets.cpp
+    ${imgui_SOURCE_DIR}/imgui_demo.cpp
+    ${imgui_SOURCE_DIR}/backends/imgui_impl_glfw.cpp
+    ${imgui_SOURCE_DIR}/backends/imgui_impl_vulkan.cpp
+)
+target_include_directories(imgui_static SYSTEM PUBLIC
+    ${imgui_SOURCE_DIR}
+    ${imgui_SOURCE_DIR}/backends
+)
+target_compile_definitions(imgui_static
+    PUBLIC IMGUI_IMPL_VULKAN_USE_VOLK # consumers' imgui_impl_vulkan.h must agree
+    PRIVATE GLFW_INCLUDE_NONE         # our TUs define this themselves
+)
+target_link_libraries(imgui_static PUBLIC glfw volk)
+
+# ---- ImGuizmo (P7) — 3D transform gizmos on top of ImGui's draw list.
+# No release tag since 1.83 (2021, incompatible with modern ImGui), so we
+# pin the exact master commit resolved on 2026-07-03 — same policy as stb.
+# SOURCE_SUBDIR points at a non-existent dir ON PURPOSE: upstream's
+# CMakeLists builds its whole widget zoo (GraphEditor, ImSequencer, ...)
+# without even wiring imgui includes. We only want ImGuizmo.cpp, and we
+# define that target ourselves below.
+FetchContent_Declare(imguizmo
+    GIT_REPOSITORY https://github.com/CedricGuillemet/ImGuizmo.git
+    GIT_TAG        87fb88b13a4f6bb04cd6ecd4e9d1625929935ff1
+    SOURCE_SUBDIR  cmake-subdir-intentionally-unused
+)
+FetchContent_MakeAvailable(imguizmo)
+# Current master keeps sources under src/ (the 1.83-era root layout is gone).
+add_library(imguizmo_static STATIC ${imguizmo_SOURCE_DIR}/src/ImGuizmo.cpp)
+target_include_directories(imguizmo_static SYSTEM PUBLIC ${imguizmo_SOURCE_DIR}/src)
+target_link_libraries(imguizmo_static PUBLIC imgui_static)
