@@ -7,6 +7,24 @@ on:
     branches: [main]
 
 jobs:
+  # Settles the clang-format gap permanently: the tree must already conform to
+  # the canonical .clang-format. -n reports without rewriting, --Werror turns
+  # any diff into a non-zero exit so CI fails loudly instead of silently
+  # reformatting. One OS is enough — formatting is platform-independent.
+  format:
+    name: format
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install clang-format
+        run: pip install clang-format
+
+      - name: Check formatting
+        run: |
+          find engine sandbox \( -name '*.cpp' -o -name '*.hpp' \) -print0 \
+            | xargs -0 clang-format -n --Werror
+
   build:
     name: ${{ matrix.os }}
     runs-on: ${{ matrix.os }}

@@ -3,6 +3,7 @@ add_library(forge_engine STATIC
     src/core/Log.cpp
     src/platform/Window.cpp
     src/platform/Input.cpp
+    src/renderer/VulkanContext.cpp
 )
 add_library(forge::engine ALIAS forge_engine)  # consumers use the namespaced name
 
@@ -19,6 +20,7 @@ target_link_libraries(forge_engine
     PRIVATE
         forge_warnings
         glfw            # implementation detail: never appears in public headers
+        volk            # Vulkan meta-loader; also implementation-only
     PUBLIC
         glm::glm        # math types will appear in the public API
 )

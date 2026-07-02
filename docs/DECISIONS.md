@@ -110,3 +110,22 @@ Threading is intentionally absent: the registry is single-threaded until systems
 exist (P4+), at which point parallelism happens *across* systems, not inside the
 registry. The two-component `each<A,B>()` walks A and filters by B; picking the
 smaller pool to drive is a P4 optimization the API is already shaped to absorb.
+
+## ADR-009 — Vulkan via volk; `VkInstance` ownership hidden behind `VulkanContext`
+
+Vulkan entry points are loaded with volk (`volkInitialize` → `volkLoadInstance`),
+not linked against `vulkan-1`. This is the decision that lets the engine *build*
+on any machine — including CI — with only the pinned Vulkan-Headers and no LunarG
+SDK installed: the loader is `dlopen`'d at runtime, so a driver-less box fails
+loudly at construction (`"Vulkan loader not found"`) rather than failing to link.
+The `VkInstance` lives inside `forge::VulkanContext`, RAII in the same shape as
+`Window` (ctor acquires loader → instance → GPU enumeration; dtor destroys). Two
+encapsulation choices matter: (1) the public header does *not* include any Vulkan
+header — it forward-declares `VkInstance` via the same `typedef struct
+VkInstance_T*` that Vulkan itself uses, which is byte-identical and standard-legal,
+so `<volk.h>` stays confined to `VulkanContext.cpp`; (2) validation layers are
+enabled only in debug builds and only when `VK_LAYER_KHRONOS_validation` is
+actually present, so dev builds get the single highest-value Vulkan debugging
+tool for free while ship builds and SDK-less machines simply log that it is off.
+At P2.0 the context stops at enumeration — it lists GPUs and logs each one;
+physical-device selection and queue families are P2.1.

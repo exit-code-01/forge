@@ -35,7 +35,7 @@ sudo apt install xorg-dev libwayland-dev libxkbcommon-dev wayland-protocols
 
 - **P0** Scope, repo, CMake build system — ✅ done
 - **P1** Platform layer: window, input, logging, math, ECS core — ✅ done
-- **P2** Renderer core: Vulkan init, swapchain, first triangle
+- **P2** Renderer core: Vulkan init, swapchain, first triangle — 🚧 instance + GPU enumeration done; device/queues, swapchain, triangle remaining
 - **P3** PBR forward renderer: texturing, basic lighting/shadows
 - **P4** Physics: Jolt integration, collision, rigidbodies
 - **P5** Asset pipeline: model/texture import, hot reload
@@ -47,6 +47,17 @@ sudo apt install xorg-dev libwayland-dev libxkbcommon-dev wayland-protocols
 
 ## Status
 
-P1 complete — window, input (latched edge detection, GLFW-mirrored keycodes),
-logger backend (timestamps, color, runtime filter, thread-safe), and a
-sparse-set ECS core with generational entity handles all landed.
+P2 in progress — P1 complete (window, input with latched edge detection and
+GLFW-mirrored keycodes, thread-safe logger, sparse-set ECS with generational
+handles). Vulkan is now bootstrapping: instance creation via volk plus GPU
+enumeration landed. Physical-device selection, queues, swapchain, and the first
+triangle are next.
+
+## Vulkan SDK
+
+Building Forge does **not** require the Vulkan SDK — volk loads the Vulkan
+loader at runtime, and the Vulkan headers are fetched by CMake. Installing the
+[LunarG Vulkan SDK](https://vulkan.lunarg.com/sdk/home) is recommended for
+development, though: it provides the `VK_LAYER_KHRONOS_validation` layer, which
+debug builds enable automatically when present (see ADR-009). Without it the
+engine still runs — it just logs that validation is off.

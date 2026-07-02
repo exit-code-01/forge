@@ -24,3 +24,30 @@ FetchContent_Declare(glm
 )
 
 FetchContent_MakeAvailable(glfw glm)
+# Our -Wall/-Wconversion arsenal audits OUR code, not vendored headers:
+# mark glm's include dirs as SYSTEM for all consumers.
+set_target_properties(glm PROPERTIES
+    INTERFACE_SYSTEM_INCLUDE_DIRECTORIES
+    "$<TARGET_PROPERTY:glm,INTERFACE_INCLUDE_DIRECTORIES>"
+)
+
+# ---- Vulkan-Headers + volk (P2.0) — consumed by: engine/src/renderer
+# volk dlopens the Vulkan loader at RUNTIME, so building the repo never
+# requires the LunarG SDK; machines without Vulkan fail gracefully at startup.
+FetchContent_Declare(vulkan_headers
+    GIT_REPOSITORY https://github.com/KhronosGroup/Vulkan-Headers.git
+    GIT_TAG        v1.3.290
+    GIT_SHALLOW    TRUE
+)
+set(VOLK_PULL_IN_VULKAN ON)
+FetchContent_Declare(volk
+    GIT_REPOSITORY https://github.com/zeux/volk.git
+    GIT_TAG        vulkan-sdk-1.3.290.0
+    GIT_SHALLOW    TRUE
+)
+FetchContent_MakeAvailable(vulkan_headers volk)
+# volk's auto-detection of the headers target is version-sensitive; wire it
+# explicitly so a volk/headers version bump can't silently break the build.
+if(TARGET volk AND TARGET Vulkan::Headers)
+    target_link_libraries(volk PUBLIC Vulkan::Headers)
+endif()
