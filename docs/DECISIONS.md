@@ -251,3 +251,45 @@ catch-up stampede. Documented consequence (learned the honest way): feeding
 slices. Units are meters/kilograms/seconds, Y-up, matching the renderer 1:1.
 Render-side interpolation between ticks is deferred to P8 (invisible at
 60/60); body-capacity caps (1024) are demo-sized and revisited at P10.
+
+## ADR-016 — Asset import is a border crossing: tool formats in, plain data out
+
+Importers convert tool formats (OBJ/glTF via Assimp v5.4.3, PNG/JPEG via
+stb_image) into plain CPU data — `Vertex[]` + `uint32[]`, RGBA8 texels — and
+that is the WHOLE contract: loaders never see a Vulkan type, the renderer
+never sees a file, and hot reload falls out for free (reload file, walk the
+same upload path). Each library owns exactly one TU under `src/assets/`.
+Pinning: Assimp by release tag with importers OPT-IN per format (the
+all-importers build is enormous; a format is enabled when assets actually
+ship in it); stb by exact master commit SHA, dated in `Dependencies.cmake`,
+because stb has no release tags. Two Assimp build overrides matter: static
+CRT/`BUILD_SHARED_LIBS OFF` alignment, and `ASSIMP_INJECT_DEBUG_POSTFIX OFF`
+— Assimp CACHE-writes `CMAKE_DEBUG_POSTFIX` globally, silently renaming OUR
+libraries. Conventions crossing the border: `aiProcess_FlipUVs` maps OBJ/GL's
+bottom-up V to our image-style UVs (v=0 top, matching stb rows and Vulkan),
+and everything is forced to RGBA8 (one texel format engine-wide, ADR-013).
+Committed test assets are procedurally GENERATED with provenance
+(`tools/gen_torus.py`, scripted crate.png): no license questions, no
+downloads, hermetic CI, and deterministic regeneration — a restored asset is
+byte-identical to the committed one. Import failure throws and the headless
+asset smoke fails CI loudly; a broken asset is a broken build.
+
+## ADR-017 — Renderer resources: handle tables, descriptor sets split by frequency
+
+GPU resources live in renderer-owned tables behind opaque `MeshHandle` /
+`TextureHandle` indices, and a frame is `drawFrame(camera, span<DrawItem>)`
+where a DrawItem is mesh + texture + model matrix — the scene stays the
+app's (later the editor's) business; the renderer just consumes the list.
+Descriptor sets are split by UPDATE FREQUENCY, the standard design this
+renderer was always growing toward: set 0 is per-frame (UBO + shadow map,
+bound once), set 1 is per-material (albedo, rebinds per draw; sorting draws
+by material is the P8-era optimization the layout is already shaped for).
+The built-in checker is texture 0, created through the same public path real
+assets use, so "no assets" is always a renderable state. Hot reload is
+`updateMesh`/`updateTexture`: waitIdle, rebuild the resource, rewrite the
+SAME descriptor set — handles held by the app stay valid forever, which is
+the entire point of handles over pointers. waitIdle is load-time quality by
+declared contract; async streaming with per-frame retirement is P8+. The
+file WATCHER lives in the app, not the engine: polling mtimes every 500 ms
+is 3-platform-portable, imperceptibly latent, and treats a failed reload as
+"retry next poll" because tools write files non-atomically.

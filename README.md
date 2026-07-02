@@ -38,7 +38,7 @@ sudo apt install xorg-dev libwayland-dev libxkbcommon-dev wayland-protocols
 - **P2** Renderer core: Vulkan init, swapchain, first triangle — ✅ done
 - **P3** PBR forward renderer: texturing, basic lighting/shadows — ✅ done
 - **P4** Physics: Jolt integration, collision, rigidbodies — ✅ done
-- **P5** Asset pipeline: model/texture import, hot reload
+- **P5** Asset pipeline: model/texture import, hot reload — ✅ done
 - **P6** Scripting: Lua bindings
 - **P7** Editor: scene hierarchy, inspector, gizmos (Dear ImGui)
 - **P8** Animation (skeletal), particles, audio
@@ -47,13 +47,14 @@ sudo apt install xorg-dev libwayland-dev libxkbcommon-dev wayland-protocols
 
 ## Status
 
-P4 complete — the world obeys gravity. Jolt v5.2.0 sits behind
-`forge::PhysicsWorld` (fixed 60 Hz stepping, box rigidbodies, restitution),
-physics transforms drive the renderer's model matrices, and the sandbox drops
-the textured cube onto the slab — it falls, bounces, settles at the
-analytically exact height, and SPACE kicks it back into the air. The P3
-renderer draws it all with PCF shadows and zero validation complaints.
-Next: P5 — the asset pipeline (Assimp, stb_image, hot reload).
+P5 complete — assets flow from disk to screen. Assimp (OBJ/glTF) and
+stb_image import into plain CPU data; the renderer serves real resource
+handles (meshes, textures, per-material descriptor sets); and hot reload
+watches the files — edit `assets/textures/crate.png` or regenerate
+`assets/models/torus.obj` while the sandbox runs and the change lands in
+about half a second, no restart. The demo scene: a crate-textured imported
+torus beside the physics cube, all PCF-shadowed, zero validation complaints
+(validation layer now active via the LunarG SDK). Next: P6 — Lua scripting.
 
 ## Vulkan SDK
 

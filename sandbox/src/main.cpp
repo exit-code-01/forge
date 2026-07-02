@@ -18,6 +18,7 @@
 #include <array>
 #include <chrono>
 #include <exception>
+#include <filesystem>
 #include <memory>
 #include <vector>
 
@@ -122,6 +123,37 @@ void buildCube(std::vector<forge::Vertex>& vertices, std::vector<uint32_t>& indi
     appendFace(vertices, indices, -y, x, z);  // -Y
 }
 
+// Hot reload (P5.3): poll a file's mtime; on change, run the reload action.
+// Polling beats OS file-watch APIs here: 3 platforms, ~zero code, and a
+// half-second latency nobody perceives. A failed load is NOT fatal — tools
+// write files non-atomically, so we may catch a half-written file; warn and
+// retry on the next poll.
+class FileWatcher {
+public:
+    explicit FileWatcher(std::filesystem::path path) : m_path(std::move(path)) {
+        std::error_code ec;
+        m_lastWrite = std::filesystem::last_write_time(m_path, ec);
+    }
+
+    template <typename Fn> void poll(Fn&& reload) {
+        std::error_code ec;
+        const auto stamp = std::filesystem::last_write_time(m_path, ec);
+        if (ec || stamp == m_lastWrite) {
+            return;
+        }
+        try {
+            reload(m_path.string());
+            m_lastWrite = stamp;
+        } catch (const std::exception& e) {
+            FORGE_WARN("hot reload deferred ({}): {}", m_path.string(), e.what());
+        }
+    }
+
+private:
+    std::filesystem::path m_path;
+    std::filesystem::file_time_type m_lastWrite;
+};
+
 } // namespace
 
 int main() {
@@ -186,7 +218,13 @@ int main() {
         // Framed so the full drop (y=3 down to the slab) stays in shot.
         const forge::Camera camera{.position = {4.2f, 2.6f, 5.2f}, .target = {0.0f, 0.6f, 0.0f}};
 
+        // Edit assets/textures/crate.png or assets/models/torus.obj while
+        // this runs — the change appears in ~half a second.
+        FileWatcher crateWatch{"assets/textures/crate.png"};
+        FileWatcher torusWatch{"assets/models/torus.obj"};
+
         auto lastTime = std::chrono::steady_clock::now();
+        auto lastPoll = lastTime;
         auto& input = window.input();
         while (!window.shouldClose()) {
             window.pollEvents();
@@ -203,6 +241,18 @@ int main() {
             const float dt = std::chrono::duration<float>(now - lastTime).count();
             lastTime = now;
             physics.update(dt);
+
+            if (renderer && now - lastPoll > std::chrono::milliseconds(500)) {
+                lastPoll = now;
+                crateWatch.poll([&](const std::string& path) {
+                    const auto img = forge::assets::loadImage(path);
+                    renderer->updateTexture(crateTexture, img.width, img.height, img.rgba);
+                });
+                torusWatch.poll([&](const std::string& path) {
+                    const auto data = forge::assets::loadMesh(path);
+                    renderer->updateMesh(torusMesh, data.vertices, data.indices);
+                });
+            }
 
             if (renderer) {
                 const std::array items{
