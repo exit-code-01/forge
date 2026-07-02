@@ -1,4 +1,13 @@
 # engine/CMakeLists.txt
+
+# Checked-in SPIR-V -> generated header (ADR-011). Building needs NO Vulkan
+# SDK; the .spv artifacts are the committed source of truth for CI.
+include(${CMAKE_SOURCE_DIR}/cmake/EmbedShaders.cmake)
+forge_embed_spirv(${CMAKE_CURRENT_BINARY_DIR}/generated/forge_gen/TriangleShaders.hpp
+    kTriangleVert ${CMAKE_CURRENT_SOURCE_DIR}/shaders/triangle.vert.spv
+    kTriangleFrag ${CMAKE_CURRENT_SOURCE_DIR}/shaders/triangle.frag.spv
+)
+
 add_library(forge_engine STATIC
     src/core/Log.cpp
     src/platform/Window.cpp
@@ -14,9 +23,11 @@ target_include_directories(forge_engine
     # Consumers (sandbox, editor) see only include/ — the public API.
     PUBLIC
         ${CMAKE_CURRENT_SOURCE_DIR}/include
-    # Engine internals can include their own private headers from src/.
+    # Engine internals can include their own private headers from src/,
+    # plus the generated (embedded-shader) headers.
     PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/src
+        ${CMAKE_CURRENT_BINARY_DIR}/generated
 )
 
 target_link_libraries(forge_engine
@@ -27,3 +38,16 @@ target_link_libraries(forge_engine
     PUBLIC
         glm::glm        # math types will appear in the public API
 )
+
+# Dev convenience, NOT in ALL: recompiles GLSL -> .spv in the SOURCE tree
+# (the .spv is the committed artifact). Only exists when the SDK is around.
+find_program(FORGE_GLSLC glslc HINTS $ENV{VULKAN_SDK}/Bin $ENV{VULKAN_SDK}/bin)
+if(FORGE_GLSLC)
+    add_custom_target(forge_shaders
+        COMMAND ${FORGE_GLSLC} -O ${CMAKE_CURRENT_SOURCE_DIR}/shaders/triangle.vert
+                -o ${CMAKE_CURRENT_SOURCE_DIR}/shaders/triangle.vert.spv
+        COMMAND ${FORGE_GLSLC} -O ${CMAKE_CURRENT_SOURCE_DIR}/shaders/triangle.frag
+                -o ${CMAKE_CURRENT_SOURCE_DIR}/shaders/triangle.frag.spv
+        COMMENT "Recompiling GLSL -> SPIR-V into the source tree (commit the result)"
+    )
+endif()

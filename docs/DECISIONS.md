@@ -147,3 +147,21 @@ the swapchain use exclusive sharing); separate families are accepted as a
 fallback. Process note: `Renderer.cpp` is the second and last TU that includes
 GLFW — `glfwCreateWindowSurface` and nothing else — a deliberate, bounded
 exception to ADR-004's "exactly one translation unit."
+
+## ADR-011 — Shaders: checked-in SPIR-V, embedded into the binary by pure CMake
+
+GLSL sources live in `engine/shaders/` next to their compiled `.spv`, and the
+`.spv` is the *committed* artifact. At configure time, `cmake/EmbedShaders.cmake`
+hex-dumps each `.spv` into a generated header of `uint32_t` arrays
+(endian-corrected 32-bit words — exactly what `vkCreateShaderModule` wants), so
+shaders are compiled into the executable. Three problems die at once: no
+runtime shader paths to resolve (the classic "works from my IDE, breaks from
+the terminal" bug), no Vulkan SDK required to *build* (CI and fresh clones stay
+green — the same philosophy as volk in ADR-009), and no shader/binary version
+skew. Committing a build artifact is normally a smell; here it is the
+deliberate escape hatch that keeps `glslc` a dev-machine-only tool — the
+`forge_shaders` CMake target (which only exists when the SDK is found)
+recompiles GLSL → SPIR-V into the source tree, and the result gets committed
+like any other change. This scheme is for the engine's own built-in shaders;
+P5's asset pipeline owns user/game shaders and hot reload, and will replace
+none of it.

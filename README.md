@@ -35,7 +35,7 @@ sudo apt install xorg-dev libwayland-dev libxkbcommon-dev wayland-protocols
 
 - **P0** Scope, repo, CMake build system — ✅ done
 - **P1** Platform layer: window, input, logging, math, ECS core — ✅ done
-- **P2** Renderer core: Vulkan init, swapchain, first triangle — 🚧 instance + GPU enumeration done; device/queues, swapchain, triangle remaining
+- **P2** Renderer core: Vulkan init, swapchain, first triangle — ✅ done
 - **P3** PBR forward renderer: texturing, basic lighting/shadows
 - **P4** Physics: Jolt integration, collision, rigidbodies
 - **P5** Asset pipeline: model/texture import, hot reload
@@ -47,11 +47,11 @@ sudo apt install xorg-dev libwayland-dev libxkbcommon-dev wayland-protocols
 
 ## Status
 
-P2 in progress — P1 complete (window, input with latched edge detection and
-GLFW-mirrored keycodes, thread-safe logger, sparse-set ECS with generational
-handles). Vulkan is now bootstrapping: instance creation via volk plus GPU
-enumeration landed. Physical-device selection, queues, swapchain, and the first
-triangle are next.
+P2 complete — the first triangle renders. The stack: instance via volk, scored
+physical-device selection (Vulkan 1.3 minimum), swapchain (SRGB, FIFO),
+dynamic rendering + synchronization2 (no render-pass objects anywhere), two
+frames in flight, embedded SPIR-V shaders. Zero validation-layer complaints.
+Next: P3, the PBR forward renderer.
 
 ## Vulkan SDK
 
