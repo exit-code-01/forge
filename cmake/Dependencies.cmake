@@ -126,3 +126,39 @@ if(TARGET assimp)
         "$<TARGET_PROPERTY:assimp,INTERFACE_INCLUDE_DIRECTORIES>"
     )
 endif()
+
+# ---- Lua 5.4.8 (P6) — consumed by: engine/src/scripting/ScriptEngine.cpp
+# The official repo ships a Makefile, not CMake, so we define the static-lib
+# target ourselves from the pinned sources — 8 lines we control beats a
+# third-party CMake fork we'd have to audit. lua.c (the standalone
+# interpreter), onelua.c (amalgamation), and ltests.c (test instrumentation)
+# are not part of the library.
+enable_language(C)
+FetchContent_Declare(lua
+    GIT_REPOSITORY https://github.com/lua/lua.git
+    GIT_TAG        v5.4.8
+    GIT_SHALLOW    TRUE
+)
+FetchContent_MakeAvailable(lua)
+file(GLOB FORGE_LUA_SOURCES ${lua_SOURCE_DIR}/*.c)
+list(REMOVE_ITEM FORGE_LUA_SOURCES
+    ${lua_SOURCE_DIR}/lua.c
+    ${lua_SOURCE_DIR}/onelua.c
+    ${lua_SOURCE_DIR}/ltests.c
+)
+add_library(lua_static STATIC ${FORGE_LUA_SOURCES})
+target_include_directories(lua_static SYSTEM PUBLIC ${lua_SOURCE_DIR})
+
+# ---- sol2 v3.5.0 (P6) — header-only C++ <-> Lua binding layer
+FetchContent_Declare(sol2
+    GIT_REPOSITORY https://github.com/ThePhD/sol2.git
+    GIT_TAG        v3.5.0
+    GIT_SHALLOW    TRUE
+)
+FetchContent_MakeAvailable(sol2)
+if(TARGET sol2)
+    set_target_properties(sol2 PROPERTIES
+        INTERFACE_SYSTEM_INCLUDE_DIRECTORIES
+        "$<TARGET_PROPERTY:sol2,INTERFACE_INCLUDE_DIRECTORIES>"
+    )
+endif()

@@ -16,6 +16,7 @@ add_library(forge_engine STATIC
     src/physics/PhysicsWorld.cpp
     src/assets/MeshLoader.cpp
     src/assets/ImageLoader.cpp
+    src/scripting/ScriptEngine.cpp
     src/renderer/VulkanContext.cpp
     src/renderer/VulkanDevice.cpp
     src/renderer/VulkanSwapchain.cpp
@@ -36,6 +37,13 @@ target_include_directories(forge_engine
         ${CMAKE_CURRENT_BINARY_DIR}/generated
 )
 
+# sol2's template-heavy bindings overflow MSVC's default object-file section
+# limit (C1128) — raise it for the one TU that includes sol2.
+if(MSVC)
+    set_source_files_properties(src/scripting/ScriptEngine.cpp
+        PROPERTIES COMPILE_OPTIONS /bigobj)
+endif()
+
 target_link_libraries(forge_engine
     PRIVATE
         forge_warnings
@@ -44,6 +52,8 @@ target_link_libraries(forge_engine
         Jolt            # physics backend; confined to src/physics (ADR-015)
         assimp          # mesh import; confined to src/assets (ADR-016)
         stb             # image import; confined to src/assets (ADR-016)
+        lua_static      # scripting VM; confined to src/scripting (ADR-018)
+        sol2            # C++ <-> Lua binding layer; same TU
     PUBLIC
         glm::glm        # math types will appear in the public API
 )

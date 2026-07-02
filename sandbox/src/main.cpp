@@ -11,6 +11,7 @@
 #include "forge/platform/Window.hpp"
 #include "forge/renderer/Renderer.hpp"
 #include "forge/renderer/VulkanContext.hpp"
+#include "forge/scripting/ScriptEngine.hpp"
 
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/vec3.hpp>
@@ -123,6 +124,18 @@ void buildCube(std::vector<forge::Vertex>& vertices, std::vector<uint32_t>& indi
     appendFace(vertices, indices, -y, x, z);  // -Y
 }
 
+// Headless scripting smoke: VM boot + a C++ <-> Lua round trip, no window
+// needed — CI exercises Lua/sol2 on all three OSes.
+void scriptDemo() {
+    forge::ScriptEngine script;
+    script.setGlobal("answer", 21);
+    const bool ok =
+        script.runString("forge.log('hello from ' .. _VERSION .. ', answer*2 = ' .. (answer * 2))");
+    if (!ok) {
+        throw std::runtime_error("script smoke failed");
+    }
+}
+
 // Hot reload (P5.3): poll a file's mtime; on change, run the reload action.
 // Polling beats OS file-watch APIs here: 3 platforms, ~zero code, and a
 // half-second latency nobody perceives. A failed load is NOT fatal — tools
@@ -164,9 +177,10 @@ int main() {
     physicsDemo();
     try {
         assetDemo();
+        scriptDemo();
     } catch (const std::exception& e) {
         FORGE_ERROR("fatal: {}", e.what());
-        return 1; // missing/broken assets are a real failure, headless or not
+        return 1; // broken assets/scripting are a real failure, headless or not
     }
 
     try {
@@ -218,10 +232,29 @@ int main() {
         // Framed so the full drop (y=3 down to the slab) stays in shot.
         const forge::Camera camera{.position = {4.2f, 2.6f, 5.2f}, .target = {0.0f, 0.6f, 0.0f}};
 
-        // Edit assets/textures/crate.png or assets/models/torus.obj while
-        // this runs — the change appears in ~half a second.
+        // Scripting: gameplay decisions move to Lua. The script spawns
+        // bodies; this list remembers what to DRAW for them (renderer stays
+        // the host's business — ADR-018).
+        struct ScriptedBox {
+            forge::BodyId body;
+            glm::vec3 halfExtents;
+        };
+        std::vector<ScriptedBox> scriptedBoxes;
+
+        forge::ScriptEngine script;
+        script.bindPhysics(physics);
+        script.bindInput(window.input());
+        script.onBoxSpawned = [&scriptedBoxes](forge::BodyId body, glm::vec3 halfExtents) {
+            scriptedBoxes.push_back({body, halfExtents});
+        };
+        script.setGlobal("cube", cubeBody.value);
+        script.runFile("assets/scripts/scene.lua");
+
+        // Edit assets/textures/crate.png, assets/models/torus.obj, or
+        // assets/scripts/scene.lua while this runs — changes land in ~0.5 s.
         FileWatcher crateWatch{"assets/textures/crate.png"};
         FileWatcher torusWatch{"assets/models/torus.obj"};
+        FileWatcher scriptWatch{"assets/scripts/scene.lua"};
 
         auto lastTime = std::chrono::steady_clock::now();
         auto lastPoll = lastTime;
@@ -231,16 +264,13 @@ int main() {
             if (input.wasKeyPressed(forge::Key::Escape)) {
                 window.requestClose();
             }
-            if (input.wasKeyPressed(forge::Key::Space)) {
-                // Mass-independent kick: pop the cube up with a little spin-
-                // inducing sideways bias. Wakes it if it fell asleep.
-                physics.addLinearVelocity(cubeBody, {0.6f, 6.0f, 0.4f});
-            }
+            // The SPACE kick lives in scene.lua now — see onUpdate there.
 
             const auto now = std::chrono::steady_clock::now();
             const float dt = std::chrono::duration<float>(now - lastTime).count();
             lastTime = now;
-            physics.update(dt);
+            script.update(dt);  // gameplay decides first...
+            physics.update(dt); // ...then the world reacts
 
             if (renderer && now - lastPoll > std::chrono::milliseconds(500)) {
                 lastPoll = now;
@@ -252,15 +282,25 @@ int main() {
                     const auto data = forge::assets::loadMesh(path);
                     renderer->updateMesh(torusMesh, data.vertices, data.indices);
                 });
+                scriptWatch.poll([&](const std::string& path) {
+                    if (script.runFile(path)) {
+                        FORGE_INFO("script hot-reloaded: {}", path);
+                    }
+                });
             }
 
             if (renderer) {
-                const std::array items{
+                std::vector<forge::DrawItem> items{
                     forge::DrawItem{cubeMesh, forge::Renderer::defaultTexture(),
                                     physics.bodyTransform(cubeBody)},
                     forge::DrawItem{torusMesh, crateTexture, torusModel},
                     forge::DrawItem{cubeMesh, forge::Renderer::defaultTexture(), groundOffset},
                 };
+                for (const ScriptedBox& box : scriptedBoxes) {
+                    items.push_back({cubeMesh, crateTexture,
+                                     physics.bodyTransform(box.body) *
+                                         glm::scale(glm::mat4(1.0f), box.halfExtents * 2.0f)});
+                }
                 renderer->drawFrame(camera, items);
             }
         }
