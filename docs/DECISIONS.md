@@ -74,3 +74,20 @@ compile error instead of a runtime bug. `GLFW_REPEAT` is deliberately ignored:
 OS key-repeat is a text-input concern (a P7 char-callback matter), not gameplay
 input — which is exactly why holding a key logs once through `wasKeyPressed` but
 continuously through `isKeyDown`.
+
+## ADR-007 — Logging: stable `FORGE_*` macros over a single `write()` choke point
+
+Logging is a thin `forge::log::message()` template behind four macros
+(`FORGE_TRACE/INFO/WARN/ERROR`) that all funnel through one `write(Level,
+string_view)` function. The call-site contract — `FORGE_INFO("x = {}", x)` — has
+not changed since P0, yet the backend has since grown timestamps, per-level ANSI
+color, a runtime min-level filter, and a mutex: none of that touched a single
+call site, which is the entire payoff of the choke point. Three deliberate
+properties: (1) the level check happens *before* `std::format` runs, so a
+filtered-out message costs one branch and never formats its arguments; (2) colors
+and the TTY check are cached per-stream and auto-disabled when output is
+redirected, so log files stay plain text; (3) the mutex wraps only the final
+`fprintf`, because interleaved half-lines from two threads are worse than the
+tiny cost of serializing the write. `std::format` (C++20) means no `printf`
+format-string/argument mismatches — the compiler checks them. A file/async sink
+is a P5+ concern; it will be another `write()` implementation, not an API change.
