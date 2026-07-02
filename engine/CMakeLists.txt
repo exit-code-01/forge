@@ -14,6 +14,8 @@ add_library(forge_engine STATIC
     src/platform/Window.cpp
     src/platform/Input.cpp
     src/physics/PhysicsWorld.cpp
+    src/assets/MeshLoader.cpp
+    src/assets/ImageLoader.cpp
     src/renderer/VulkanContext.cpp
     src/renderer/VulkanDevice.cpp
     src/renderer/VulkanSwapchain.cpp
@@ -40,6 +42,8 @@ target_link_libraries(forge_engine
         glfw            # implementation detail: never appears in public headers
         volk            # Vulkan meta-loader; also implementation-only
         Jolt            # physics backend; confined to src/physics (ADR-015)
+        assimp          # mesh import; confined to src/assets (ADR-016)
+        stb             # image import; confined to src/assets (ADR-016)
     PUBLIC
         glm::glm        # math types will appear in the public API
 )

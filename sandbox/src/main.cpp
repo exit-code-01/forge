@@ -4,6 +4,7 @@
 // OPTIONAL: no Vulkan means warn and keep running windowed.
 // Window must precede VulkanContext: the surface extensions come from GLFW.
 
+#include "forge/assets/Assets.hpp"
 #include "forge/ecs/Registry.hpp"
 #include "forge/forge.hpp"
 #include "forge/physics/PhysicsWorld.hpp"
@@ -86,6 +87,17 @@ void physicsDemo() {
     FORGE_INFO("physics drop: y start {:.2f} -> mid-fall {:.2f} -> rest {:.2f}", y0, yMid, yRest);
 }
 
+// Headless asset smoke: importers must work on ANY machine, including CI —
+// these run before the window and fail LOUDLY if the committed assets or
+// the import path regress. Loaders log their own success lines.
+void assetDemo() {
+    const auto torus = forge::assets::loadMesh("assets/models/torus.obj");
+    const auto crate = forge::assets::loadImage("assets/textures/crate.png");
+    if (torus.indices.empty() || crate.rgba.empty()) {
+        throw std::runtime_error("asset smoke: importer returned empty data");
+    }
+}
+
 // Unit cube, 24 vertices (4 per face so normals are hard), 36 indices.
 // Faces are wound CCW seen from OUTSIDE; u cross v == n keeps that true.
 void appendFace(std::vector<forge::Vertex>& vertices, std::vector<uint32_t>& indices, glm::vec3 n,
@@ -118,6 +130,12 @@ int main() {
 
     ecsDemo();
     physicsDemo();
+    try {
+        assetDemo();
+    } catch (const std::exception& e) {
+        FORGE_ERROR("fatal: {}", e.what());
+        return 1; // missing/broken assets are a real failure, headless or not
+    }
 
     try {
         forge::Window window({.title = "Forge Sandbox", .width = 1280, .height = 720});

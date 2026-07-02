@@ -85,3 +85,44 @@ if(TARGET Jolt)
         "$<TARGET_PROPERTY:Jolt,INTERFACE_INCLUDE_DIRECTORIES>"
     )
 endif()
+
+# ---- stb_image (P5) — consumed by: engine/src/assets/ImageLoader.cpp
+# stb has NO release tags, so we pin the exact master commit resolved on
+# 2026-07-02 (stb_image v2.30 era). Header-only: no CMakeLists in the repo,
+# MakeAvailable just populates and we wrap it in an INTERFACE target.
+FetchContent_Declare(stb
+    GIT_REPOSITORY https://github.com/nothings/stb.git
+    GIT_TAG        31c1ad37456438565541f4919958214b6e762fb4
+)
+FetchContent_MakeAvailable(stb)
+add_library(stb INTERFACE)
+target_include_directories(stb SYSTEM INTERFACE ${stb_SOURCE_DIR})
+
+# ---- Assimp v5.4.3 (P5) — consumed by: engine/src/assets/MeshLoader.cpp
+# Importers are opt-IN: the all-formats build is enormous and we read
+# exactly two formats. Add importers here when the game actually ships
+# assets in them — not speculatively (ADR-003 spirit, ADR-016 letter).
+set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
+set(ASSIMP_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+set(ASSIMP_BUILD_ASSIMP_TOOLS OFF CACHE BOOL "" FORCE)
+set(ASSIMP_NO_EXPORT ON CACHE BOOL "" FORCE)
+set(ASSIMP_INSTALL OFF CACHE BOOL "" FORCE)
+set(ASSIMP_BUILD_ALL_IMPORTERS_BY_DEFAULT OFF CACHE BOOL "" FORCE)
+set(ASSIMP_BUILD_OBJ_IMPORTER ON CACHE BOOL "" FORCE)
+set(ASSIMP_BUILD_GLTF_IMPORTER ON CACHE BOOL "" FORCE)
+set(ASSIMP_WARNINGS_AS_ERRORS OFF CACHE BOOL "" FORCE)
+# Assimp CACHE-injects CMAKE_DEBUG_POSTFIX "d" GLOBALLY, renaming OUR libs
+# (forge_engine -> forge_engined). Its build, its postfix — not ours.
+set(ASSIMP_INJECT_DEBUG_POSTFIX OFF CACHE BOOL "" FORCE)
+FetchContent_Declare(assimp
+    GIT_REPOSITORY https://github.com/assimp/assimp.git
+    GIT_TAG        v5.4.3
+    GIT_SHALLOW    TRUE
+)
+FetchContent_MakeAvailable(assimp)
+if(TARGET assimp)
+    set_target_properties(assimp PROPERTIES
+        INTERFACE_SYSTEM_INCLUDE_DIRECTORIES
+        "$<TARGET_PROPERTY:assimp,INTERFACE_INCLUDE_DIRECTORIES>"
+    )
+endif()
