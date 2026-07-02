@@ -19,6 +19,7 @@
 
 #include <cstdint>
 #include <string>
+#include <vector>
 
 struct GLFWwindow; // opaque; defined by GLFW inside the engine only
 
@@ -53,6 +54,12 @@ public:
 
     // For the renderer (P2: vkCreateSurface needs it). Not for app code.
     [[nodiscard]] GLFWwindow* nativeHandle() const { return m_handle; }
+
+    // Instance extensions Vulkan needs to present to THIS platform's windows
+    // (surface + platform-surface). Instance method on purpose: it requires
+    // GLFW to be initialized, which constructing a Window guarantees.
+    // Throws std::runtime_error if the machine has no Vulkan loader at all.
+    [[nodiscard]] std::vector<const char*> requiredVulkanExtensions() const;
 
 private:
     GLFWwindow* m_handle = nullptr;

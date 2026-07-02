@@ -91,6 +91,17 @@ void Window::pollEvents() {
 
 bool Window::shouldClose() const { return glfwWindowShouldClose(m_handle) == GLFW_TRUE; }
 
+std::vector<const char*> Window::requiredVulkanExtensions() const {
+    // No Vulkan types involved: GLFW hands back static strings owned by GLFW,
+    // valid until glfwTerminate. Null means no loader/ICD on this machine.
+    uint32_t count = 0;
+    const char** extensions = glfwGetRequiredInstanceExtensions(&count);
+    if (extensions == nullptr) {
+        throw std::runtime_error("GLFW: Vulkan not supported on this machine (no loader?)");
+    }
+    return {extensions, extensions + count};
+}
+
 void Window::requestClose() { glfwSetWindowShouldClose(m_handle, GLFW_TRUE); }
 
 } // namespace forge

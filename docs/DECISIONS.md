@@ -129,3 +129,21 @@ actually present, so dev builds get the single highest-value Vulkan debugging
 tool for free while ship builds and SDK-less machines simply log that it is off.
 At P2.0 the context stops at enumeration — it lists GPUs and logs each one;
 physical-device selection and queue families are P2.1.
+
+## ADR-010 — Vulkan 1.3 minimum: dynamic rendering + sync2; scored device selection
+
+The engine requires Vulkan 1.3 and renders with *dynamic rendering* plus
+*synchronization2* — no `VkRenderPass`, no `VkFramebuffer`, ever. Render-pass
+objects exist for tiler GPUs and add ~150 lines of ceremony per pass
+configuration; dynamic rendering is the API shape modern engines (and our P3
+PBR pass) actually want. Raising the floor to 1.3 is what buys this: hardware
+that can't do 1.3 (2015-era GPUs) is not our audience. Device selection is a
+scored filter, not a "pick first": a GPU is eligible only if it offers 1.3, a
+graphics queue, present support *for our actual surface*, `VK_KHR_swapchain`,
+and the two features above — then discrete beats integrated by a wide margin.
+Ineligible hardware is skipped with a logged reason, never silently. Queue
+policy: prefer one combined graphics+present family (virtually universal, lets
+the swapchain use exclusive sharing); separate families are accepted as a
+fallback. Process note: `Renderer.cpp` is the second and last TU that includes
+GLFW — `glfwCreateWindowSurface` and nothing else — a deliberate, bounded
+exception to ADR-004's "exactly one translation unit."

@@ -4,6 +4,8 @@ add_library(forge_engine STATIC
     src/platform/Window.cpp
     src/platform/Input.cpp
     src/renderer/VulkanContext.cpp
+    src/renderer/VulkanDevice.cpp
+    src/renderer/Renderer.cpp
 )
 add_library(forge::engine ALIAS forge_engine)  # consumers use the namespaced name
 

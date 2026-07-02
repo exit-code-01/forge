@@ -1,11 +1,13 @@
-// sandbox/src/main.cpp — P1 complete + P2.0 demo
-// Order matters for the demo: ECS runs first (works on ANY machine, even
-// headless CI), then Vulkan probe (optional — warns and continues without),
-// then the window loop.
+// sandbox/src/main.cpp — P2 demo
+// Order matters: ECS first (works on ANY machine, even headless CI), then the
+// window (headless CI dies here, gracefully), then the renderer — which is
+// OPTIONAL: no Vulkan means warn and keep running windowed.
+// Window must precede VulkanContext: the surface extensions come from GLFW.
 
 #include "forge/ecs/Registry.hpp"
 #include "forge/forge.hpp"
 #include "forge/platform/Window.hpp"
+#include "forge/renderer/Renderer.hpp"
 #include "forge/renderer/VulkanContext.hpp"
 
 #include <glm/vec3.hpp>
@@ -59,16 +61,20 @@ int main() {
 
     ecsDemo();
 
-    // Renderer is OPTIONAL at this stage: no Vulkan = warn and keep going.
-    std::unique_ptr<forge::VulkanContext> vulkan;
-    try {
-        vulkan = std::make_unique<forge::VulkanContext>();
-    } catch (const std::exception& e) {
-        FORGE_WARN("renderer unavailable: {}", e.what());
-    }
-
     try {
         forge::Window window({.title = "Forge Sandbox", .width = 1280, .height = 720});
+
+        // Declaration order == destruction order: renderer dies before the
+        // context, context before the window. Do not reorder.
+        std::unique_ptr<forge::VulkanContext> vulkan;
+        std::unique_ptr<forge::Renderer> renderer;
+        try {
+            vulkan = std::make_unique<forge::VulkanContext>(window.requiredVulkanExtensions());
+            renderer = std::make_unique<forge::Renderer>(window, *vulkan);
+        } catch (const std::exception& e) {
+            FORGE_WARN("renderer unavailable: {} — running windowed without rendering", e.what());
+        }
+
         auto& input = window.input();
         while (!window.shouldClose()) {
             window.pollEvents();
@@ -77,6 +83,9 @@ int main() {
             }
             if (input.wasKeyPressed(forge::Key::Space)) {
                 FORGE_INFO("space at ({:.0f}, {:.0f})", input.mouseX(), input.mouseY());
+            }
+            if (renderer) {
+                renderer->drawFrame();
             }
         }
     } catch (const std::exception& e) {
