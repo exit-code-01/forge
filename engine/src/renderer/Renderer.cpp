@@ -36,6 +36,10 @@ constexpr uint32_t kFramesInFlight = 2;
 // real scene demands cascades.
 constexpr uint32_t kShadowMapSize = 2048;
 
+// Hard cap on live textures — sizes the descriptor pool. Demo-era number;
+// pool growth (or bindless) is a P8+ conversation.
+constexpr uint32_t kMaxTextures = 64;
+
 // Per-frame GPU data (ADR-012). Layout mirrors the std140 block in
 // mesh.vert/frag: mat4s then vec4s — nothing that std140 would repack.
 struct FrameUbo {
@@ -189,13 +193,27 @@ struct Renderer::Impl {
     VkImageView depthView = VK_NULL_HANDLE;
     VkFormat depthFormat = VK_FORMAT_UNDEFINED;
 
-    VkDescriptorSetLayout descriptorLayout = VK_NULL_HANDLE;
+    // Descriptors split by UPDATE FREQUENCY (ADR-017): set 0 = per-frame
+    // (UBO + shadow map), set 1 = per-material (albedo).
+    VkDescriptorSetLayout frameSetLayout = VK_NULL_HANDLE;
+    VkDescriptorSetLayout materialSetLayout = VK_NULL_HANDLE;
     VkDescriptorPool descriptorPool = VK_NULL_HANDLE;
-    std::array<VkDescriptorSet, kFramesInFlight> descriptorSets{};
+    std::array<VkDescriptorSet, kFramesInFlight> frameSets{};
     std::array<GpuBuffer, kFramesInFlight> frameUbos;
 
-    // Built-in placeholder albedo until P5 brings real assets (ADR-013).
-    std::unique_ptr<VulkanTexture> albedoTexture;
+    // GPU resource tables; handles are indices. Entry 0 of textures is the
+    // built-in checker placeholder (ADR-013).
+    struct MeshEntry {
+        GpuBuffer vertexBuffer;
+        GpuBuffer indexBuffer;
+        uint32_t indexCount = 0;
+    };
+    std::vector<MeshEntry> meshes;
+    struct TextureEntry {
+        std::unique_ptr<VulkanTexture> texture;
+        VkDescriptorSet set = VK_NULL_HANDLE; // per-material set (set 1)
+    };
+    std::vector<TextureEntry> textures;
 
     // Directional shadow map (ADR-014): persistent, NOT tied to the swapchain.
     VkImage shadowImage = VK_NULL_HANDLE;
@@ -207,11 +225,6 @@ struct Renderer::Impl {
     VkPipeline pipeline = VK_NULL_HANDLE;
     VkPipeline shadowPipeline = VK_NULL_HANDLE; // depth-only, light's POV
     VkCommandPool commandPool = VK_NULL_HANDLE;
-
-    // The one mesh (see uploadMesh contract in the header).
-    GpuBuffer vertexBuffer;
-    GpuBuffer indexBuffer;
-    uint32_t indexCount = 0;
 
     // Per frame-in-flight: recording + acquire sync.
     std::array<VkCommandBuffer, kFramesInFlight> commandBuffers{};
@@ -235,8 +248,11 @@ struct Renderer::Impl {
     void createFrameObjects();
     void createImageSemaphores();
     void recreateSwapchain();
+    void writeMaterialSet(TextureEntry& entry) const;
+    void buildMeshEntry(std::span<const Vertex> vertices, std::span<const uint32_t> indices,
+                        MeshEntry& out) const;
     void record(VkCommandBuffer cmd, uint32_t imageIndex, uint32_t frame,
-                std::span<const glm::mat4> models) const;
+                std::span<const DrawItem> items) const;
 };
 
 void Renderer::Impl::createDepthResources() {
@@ -309,35 +325,46 @@ void Renderer::Impl::destroyDepthResources() {
 void Renderer::Impl::createDescriptors() {
     const VkDevice dev = device->device();
 
-    // Binding 0: per-frame UBO (both stages). Binding 1: albedo texture.
-    // Binding 2: shadow map (comparison sampler).
-    VkDescriptorSetLayoutBinding bindings[3]{};
-    bindings[0].binding = 0;
-    bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-    bindings[0].descriptorCount = 1;
-    bindings[0].stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
-    bindings[1].binding = 1;
-    bindings[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    bindings[1].descriptorCount = 1;
-    bindings[1].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
-    bindings[2].binding = 2;
-    bindings[2].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    bindings[2].descriptorCount = 1;
-    bindings[2].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
-    VkDescriptorSetLayoutCreateInfo layoutInfo{};
-    layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-    layoutInfo.bindingCount = 3;
-    layoutInfo.pBindings = bindings;
-    if (vkCreateDescriptorSetLayout(dev, &layoutInfo, nullptr, &descriptorLayout) != VK_SUCCESS) {
-        throw std::runtime_error("vkCreateDescriptorSetLayout failed");
+    // SET 0 (per-frame): binding 0 UBO, binding 1 shadow map.
+    VkDescriptorSetLayoutBinding frameBindings[2]{};
+    frameBindings[0].binding = 0;
+    frameBindings[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    frameBindings[0].descriptorCount = 1;
+    frameBindings[0].stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
+    frameBindings[1].binding = 1;
+    frameBindings[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    frameBindings[1].descriptorCount = 1;
+    frameBindings[1].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    VkDescriptorSetLayoutCreateInfo frameLayoutInfo{};
+    frameLayoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+    frameLayoutInfo.bindingCount = 2;
+    frameLayoutInfo.pBindings = frameBindings;
+    if (vkCreateDescriptorSetLayout(dev, &frameLayoutInfo, nullptr, &frameSetLayout) !=
+        VK_SUCCESS) {
+        throw std::runtime_error("vkCreateDescriptorSetLayout (frame) failed");
+    }
+
+    // SET 1 (per-material): binding 0 albedo.
+    VkDescriptorSetLayoutBinding materialBinding{};
+    materialBinding.binding = 0;
+    materialBinding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    materialBinding.descriptorCount = 1;
+    materialBinding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    VkDescriptorSetLayoutCreateInfo materialLayoutInfo{};
+    materialLayoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+    materialLayoutInfo.bindingCount = 1;
+    materialLayoutInfo.pBindings = &materialBinding;
+    if (vkCreateDescriptorSetLayout(dev, &materialLayoutInfo, nullptr, &materialSetLayout) !=
+        VK_SUCCESS) {
+        throw std::runtime_error("vkCreateDescriptorSetLayout (material) failed");
     }
 
     VkDescriptorPoolSize poolSizes[2]{};
     poolSizes[0] = {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, kFramesInFlight};
-    poolSizes[1] = {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 2 * kFramesInFlight};
+    poolSizes[1] = {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, kFramesInFlight + kMaxTextures};
     VkDescriptorPoolCreateInfo poolInfo{};
     poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-    poolInfo.maxSets = kFramesInFlight;
+    poolInfo.maxSets = kFramesInFlight + kMaxTextures;
     poolInfo.poolSizeCount = 2;
     poolInfo.pPoolSizes = poolSizes;
     if (vkCreateDescriptorPool(dev, &poolInfo, nullptr, &descriptorPool) != VK_SUCCESS) {
@@ -345,13 +372,13 @@ void Renderer::Impl::createDescriptors() {
     }
 
     std::array<VkDescriptorSetLayout, kFramesInFlight> layouts{};
-    layouts.fill(descriptorLayout);
+    layouts.fill(frameSetLayout);
     VkDescriptorSetAllocateInfo allocInfo{};
     allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
     allocInfo.descriptorPool = descriptorPool;
     allocInfo.descriptorSetCount = kFramesInFlight;
     allocInfo.pSetLayouts = layouts.data();
-    if (vkAllocateDescriptorSets(dev, &allocInfo, descriptorSets.data()) != VK_SUCCESS) {
+    if (vkAllocateDescriptorSets(dev, &allocInfo, frameSets.data()) != VK_SUCCESS) {
         throw std::runtime_error("vkAllocateDescriptorSets failed");
     }
 
@@ -362,31 +389,48 @@ void Renderer::Impl::createDescriptors() {
             GpuBuffer(*device, sizeof(FrameUbo), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
                       VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
         VkDescriptorBufferInfo bufferInfo{frameUbos[i].handle(), 0, sizeof(FrameUbo)};
-        VkDescriptorImageInfo albedoInfo{albedoTexture->sampler(), albedoTexture->view(),
-                                         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
         VkDescriptorImageInfo shadowInfo{shadowSampler, shadowView,
                                          VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
-        VkWriteDescriptorSet writes[3]{};
+        VkWriteDescriptorSet writes[2]{};
         writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        writes[0].dstSet = descriptorSets[i];
+        writes[0].dstSet = frameSets[i];
         writes[0].dstBinding = 0;
         writes[0].descriptorCount = 1;
         writes[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
         writes[0].pBufferInfo = &bufferInfo;
         writes[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        writes[1].dstSet = descriptorSets[i];
+        writes[1].dstSet = frameSets[i];
         writes[1].dstBinding = 1;
         writes[1].descriptorCount = 1;
         writes[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        writes[1].pImageInfo = &albedoInfo;
-        writes[2].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        writes[2].dstSet = descriptorSets[i];
-        writes[2].dstBinding = 2;
-        writes[2].descriptorCount = 1;
-        writes[2].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        writes[2].pImageInfo = &shadowInfo;
-        vkUpdateDescriptorSets(dev, 3, writes, 0, nullptr);
+        writes[1].pImageInfo = &shadowInfo;
+        vkUpdateDescriptorSets(dev, 2, writes, 0, nullptr);
     }
+}
+
+// Allocates (once) and writes the per-material set for a texture entry.
+void Renderer::Impl::writeMaterialSet(TextureEntry& entry) const {
+    const VkDevice dev = device->device();
+    if (entry.set == VK_NULL_HANDLE) {
+        VkDescriptorSetAllocateInfo allocInfo{};
+        allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+        allocInfo.descriptorPool = descriptorPool;
+        allocInfo.descriptorSetCount = 1;
+        allocInfo.pSetLayouts = &materialSetLayout;
+        if (vkAllocateDescriptorSets(dev, &allocInfo, &entry.set) != VK_SUCCESS) {
+            throw std::runtime_error("out of texture descriptor sets (kMaxTextures)");
+        }
+    }
+    VkDescriptorImageInfo albedoInfo{entry.texture->sampler(), entry.texture->view(),
+                                     VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+    VkWriteDescriptorSet write{};
+    write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    write.dstSet = entry.set;
+    write.dstBinding = 0;
+    write.descriptorCount = 1;
+    write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    write.pImageInfo = &albedoInfo;
+    vkUpdateDescriptorSets(dev, 1, &write, 0, nullptr);
 }
 
 void Renderer::Impl::createPipeline() {
@@ -474,10 +518,11 @@ void Renderer::Impl::createPipeline() {
     pushRange.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
     pushRange.offset = 0;
     pushRange.size = sizeof(glm::mat4);
+    const VkDescriptorSetLayout setLayouts[] = {frameSetLayout, materialSetLayout};
     VkPipelineLayoutCreateInfo layoutInfo{};
     layoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-    layoutInfo.setLayoutCount = 1;
-    layoutInfo.pSetLayouts = &descriptorLayout;
+    layoutInfo.setLayoutCount = 2;
+    layoutInfo.pSetLayouts = setLayouts;
     layoutInfo.pushConstantRangeCount = 1;
     layoutInfo.pPushConstantRanges = &pushRange;
     if (vkCreatePipelineLayout(dev, &layoutInfo, nullptr, &pipelineLayout) != VK_SUCCESS) {
@@ -667,13 +712,21 @@ void Renderer::Impl::recreateSwapchain() {
 }
 
 void Renderer::Impl::record(VkCommandBuffer cmd, uint32_t imageIndex, uint32_t frame,
-                            std::span<const glm::mat4> models) const {
+                            std::span<const DrawItem> items) const {
     VkCommandBufferBeginInfo beginInfo{};
     beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
     vkBeginCommandBuffer(cmd, &beginInfo);
 
-    const VkBuffer vb = vertexBuffer.handle();
     const VkDeviceSize vbOffset = 0;
+    const auto drawItemMesh = [&](const DrawItem& item) {
+        const MeshEntry& mesh = meshes[item.mesh.value];
+        const VkBuffer vb = mesh.vertexBuffer.handle();
+        vkCmdBindVertexBuffers(cmd, 0, 1, &vb, &vbOffset);
+        vkCmdBindIndexBuffer(cmd, mesh.indexBuffer.handle(), 0, VK_INDEX_TYPE_UINT32);
+        vkCmdPushConstants(cmd, pipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(glm::mat4),
+                           &item.model);
+        vkCmdDrawIndexed(cmd, mesh.indexCount, 1, 0, 0, 0);
+    };
 
     // ---- Pass 1: shadow map, from the light's point of view (ADR-014).
     // UNDEFINED discard is fine (cleared every frame) and doubles as the
@@ -709,16 +762,12 @@ void Renderer::Impl::record(VkCommandBuffer cmd, uint32_t imageIndex, uint32_t f
     const VkRect2D shadowScissor{{0, 0}, {kShadowMapSize, kShadowMapSize}};
     vkCmdSetViewport(cmd, 0, 1, &shadowViewport);
     vkCmdSetScissor(cmd, 0, 1, &shadowScissor);
-    if (indexCount > 0 && !models.empty()) {
+    if (!items.empty()) {
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, shadowPipeline);
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout, 0, 1,
-                                &descriptorSets[frame], 0, nullptr);
-        vkCmdBindVertexBuffers(cmd, 0, 1, &vb, &vbOffset);
-        vkCmdBindIndexBuffer(cmd, indexBuffer.handle(), 0, VK_INDEX_TYPE_UINT32);
-        for (const glm::mat4& model : models) {
-            vkCmdPushConstants(cmd, pipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0,
-                               sizeof(glm::mat4), &model);
-            vkCmdDrawIndexed(cmd, indexCount, 1, 0, 0, 0);
+                                &frameSets[frame], 0, nullptr);
+        for (const DrawItem& item : items) {
+            drawItemMesh(item); // no material set: depth doesn't care about albedo
         }
     }
     vkCmdEndRendering(cmd);
@@ -787,16 +836,16 @@ void Renderer::Impl::record(VkCommandBuffer cmd, uint32_t imageIndex, uint32_t f
     vkCmdSetViewport(cmd, 0, 1, &viewport);
     vkCmdSetScissor(cmd, 0, 1, &scissor);
 
-    if (indexCount > 0 && !models.empty()) {
+    if (!items.empty()) {
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout, 0, 1,
-                                &descriptorSets[frame], 0, nullptr);
-        vkCmdBindVertexBuffers(cmd, 0, 1, &vb, &vbOffset);
-        vkCmdBindIndexBuffer(cmd, indexBuffer.handle(), 0, VK_INDEX_TYPE_UINT32);
-        for (const glm::mat4& model : models) {
-            vkCmdPushConstants(cmd, pipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0,
-                               sizeof(glm::mat4), &model);
-            vkCmdDrawIndexed(cmd, indexCount, 1, 0, 0, 0);
+                                &frameSets[frame], 0, nullptr);
+        for (const DrawItem& item : items) {
+            // Set 1 rebinds per item; sorting draws by texture is the P8-era
+            // optimization this layout is already shaped for.
+            vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout, 1, 1,
+                                    &textures[item.texture.value].set, 0, nullptr);
+            drawItemMesh(item);
         }
     }
     vkCmdEndRendering(cmd);
@@ -826,14 +875,16 @@ Renderer::Renderer(Window& window, VulkanContext& context)
                                                           extent.width, extent.height);
     m_impl->createDepthResources();
     m_impl->createFrameObjects(); // command pool first: texture upload needs it
-    m_impl->albedoTexture = std::make_unique<VulkanTexture>(*m_impl->device, m_impl->commandPool,
-                                                            256, 256, makeCheckerTexels(256, 32));
     m_impl->createShadowResources();
     m_impl->createDescriptors();
     m_impl->createPipeline();
     m_impl->createShadowPipeline();
+    // Texture 0 = the built-in checker placeholder (ADR-013), created through
+    // the same public path every real asset uses.
+    const TextureHandle checker = addTexture(256, 256, makeCheckerTexels(256, 32));
+    (void)checker; // handle 0 by construction; defaultTexture() documents it
     FORGE_INFO("renderer ready: dynamic rendering, depth {}, {} frames in flight, "
-               "256x256 checker albedo (9 mips), {}x{} shadow map",
+               "{}x{} shadow map, checker placeholder as texture 0",
                m_impl->depthFormat == VK_FORMAT_D32_SFLOAT ? "D32_SFLOAT" : "D+S fallback",
                kFramesInFlight, kShadowMapSize, kShadowMapSize);
 }
@@ -853,15 +904,15 @@ Renderer::~Renderer() {
         vkDestroyPipeline(dev, m_impl->pipeline, nullptr);
         vkDestroyPipeline(dev, m_impl->shadowPipeline, nullptr);
         vkDestroyPipelineLayout(dev, m_impl->pipelineLayout, nullptr);
-        vkDestroyDescriptorPool(dev, m_impl->descriptorPool, nullptr); // frees the sets
-        vkDestroyDescriptorSetLayout(dev, m_impl->descriptorLayout, nullptr);
+        vkDestroyDescriptorPool(dev, m_impl->descriptorPool, nullptr); // frees ALL sets
+        vkDestroyDescriptorSetLayout(dev, m_impl->frameSetLayout, nullptr);
+        vkDestroyDescriptorSetLayout(dev, m_impl->materialSetLayout, nullptr);
         vkDestroySampler(dev, m_impl->shadowSampler, nullptr);
         vkDestroyImageView(dev, m_impl->shadowView, nullptr);
         vkDestroyImage(dev, m_impl->shadowImage, nullptr);
         vkFreeMemory(dev, m_impl->shadowMemory, nullptr);
-        m_impl->albedoTexture.reset();
-        m_impl->vertexBuffer = GpuBuffer{};
-        m_impl->indexBuffer = GpuBuffer{};
+        m_impl->textures.clear(); // VulkanTextures need the device alive
+        m_impl->meshes.clear();   // ditto for their GpuBuffers
         for (auto& ubo : m_impl->frameUbos) {
             ubo = GpuBuffer{};
         }
@@ -874,33 +925,67 @@ Renderer::~Renderer() {
     }
 }
 
-void Renderer::uploadMesh(std::span<const Vertex> vertices, std::span<const uint32_t> indices) {
-    Impl& impl = *m_impl;
-    if (impl.indexCount != 0) {
-        // One mesh until P5's asset pipeline. Replacing would need a
-        // waitIdle + buffer swap — design that when assets exist, not before.
-        throw std::runtime_error("uploadMesh may only be called once (P5 owns real meshes)");
-    }
+// Shared by addMesh and updateMesh: build device-local buffers via staging.
+void Renderer::Impl::buildMeshEntry(std::span<const Vertex> vertices,
+                                    std::span<const uint32_t> indices, MeshEntry& out) const {
     const VkDeviceSize vertexBytes = vertices.size_bytes();
     const VkDeviceSize indexBytes = indices.size_bytes();
-    impl.vertexBuffer =
-        GpuBuffer(*impl.device, vertexBytes,
-                  VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
-                  VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
-    impl.indexBuffer =
-        GpuBuffer(*impl.device, indexBytes,
-                  VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
-                  VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
-    uploadToBuffer(*impl.device, impl.commandPool, impl.vertexBuffer.handle(), vertices.data(),
-                   vertexBytes);
-    uploadToBuffer(*impl.device, impl.commandPool, impl.indexBuffer.handle(), indices.data(),
-                   indexBytes);
-    impl.indexCount = static_cast<uint32_t>(indices.size());
-    FORGE_INFO("mesh uploaded: {} vertices, {} indices ({} KiB on GPU)", vertices.size(),
-               indices.size(), (vertexBytes + indexBytes + 1023) / 1024);
+    out.vertexBuffer = GpuBuffer(
+        *device, vertexBytes, VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+        VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+    out.indexBuffer = GpuBuffer(*device, indexBytes,
+                                VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
+                                VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+    uploadToBuffer(*device, commandPool, out.vertexBuffer.handle(), vertices.data(), vertexBytes);
+    uploadToBuffer(*device, commandPool, out.indexBuffer.handle(), indices.data(), indexBytes);
+    out.indexCount = static_cast<uint32_t>(indices.size());
 }
 
-void Renderer::drawFrame(const Camera& camera, std::span<const glm::mat4> modelMatrices) {
+MeshHandle Renderer::addMesh(std::span<const Vertex> vertices, std::span<const uint32_t> indices) {
+    Impl& impl = *m_impl;
+    Impl::MeshEntry entry;
+    impl.buildMeshEntry(vertices, indices, entry);
+    impl.meshes.push_back(std::move(entry));
+    const auto handle = static_cast<uint32_t>(impl.meshes.size() - 1);
+    FORGE_INFO("mesh[{}] uploaded: {} vertices, {} indices ({} KiB on GPU)", handle,
+               vertices.size(), indices.size(),
+               (vertices.size_bytes() + indices.size_bytes() + 1023) / 1024);
+    return {handle};
+}
+
+void Renderer::updateMesh(MeshHandle handle, std::span<const Vertex> vertices,
+                          std::span<const uint32_t> indices) {
+    Impl& impl = *m_impl;
+    impl.device->waitIdle(); // in-flight frames may still read the old buffers
+    impl.buildMeshEntry(vertices, indices, impl.meshes.at(handle.value));
+    FORGE_INFO("mesh[{}] hot-reloaded: {} vertices, {} indices", handle.value, vertices.size(),
+               indices.size());
+}
+
+TextureHandle Renderer::addTexture(uint32_t width, uint32_t height, std::span<const uint8_t> rgba) {
+    Impl& impl = *m_impl;
+    Impl::TextureEntry entry;
+    entry.texture =
+        std::make_unique<VulkanTexture>(*impl.device, impl.commandPool, width, height, rgba);
+    impl.writeMaterialSet(entry);
+    impl.textures.push_back(std::move(entry));
+    const auto handle = static_cast<uint32_t>(impl.textures.size() - 1);
+    FORGE_INFO("texture[{}] uploaded: {}x{}", handle, width, height);
+    return {handle};
+}
+
+void Renderer::updateTexture(TextureHandle handle, uint32_t width, uint32_t height,
+                             std::span<const uint8_t> rgba) {
+    Impl& impl = *m_impl;
+    Impl::TextureEntry& entry = impl.textures.at(handle.value);
+    impl.device->waitIdle(); // the old image may be mid-sample on the GPU
+    entry.texture =
+        std::make_unique<VulkanTexture>(*impl.device, impl.commandPool, width, height, rgba);
+    impl.writeMaterialSet(entry); // same set, new image view
+    FORGE_INFO("texture[{}] hot-reloaded: {}x{}", handle.value, width, height);
+}
+
+void Renderer::drawFrame(const Camera& camera, std::span<const DrawItem> items) {
     Impl& impl = *m_impl;
     const VkDevice dev = impl.device->device();
 
@@ -959,7 +1044,7 @@ void Renderer::drawFrame(const Camera& camera, std::span<const glm::mat4> modelM
 
     const VkCommandBuffer cmd = impl.commandBuffers[frame];
     vkResetCommandBuffer(cmd, 0);
-    impl.record(cmd, imageIndex, frame, modelMatrices);
+    impl.record(cmd, imageIndex, frame, items);
 
     VkSemaphoreSubmitInfo waitInfo{};
     waitInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO;

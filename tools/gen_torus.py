@@ -49,9 +49,11 @@ def main() -> None:
         for j in range(TUBE_SEGMENTS):
             a, b = idx(i, j), idx(i + 1, j)
             c, d = idx(i + 1, j + 1), idx(i, j + 1)
-            # Two CCW-outward triangles per quad.
-            lines.append(f"f {a}/{a}/{a} {b}/{b}/{b} {c}/{c}/{c}")
-            lines.append(f"f {a}/{a}/{a} {c}/{c}/{c} {d}/{d}/{d}")
+            # Two CCW-outward triangles per quad. Verified with pixels, not
+            # algebra: (a,b,c) order renders inside-out (cross(dTheta,dPhi)
+            # points INTO the tube), so wind (a,c,b) / (a,d,c).
+            lines.append(f"f {a}/{a}/{a} {c}/{c}/{c} {b}/{b}/{b}")
+            lines.append(f"f {a}/{a}/{a} {d}/{d}/{d} {c}/{c}/{c}")
 
     with open(out_path, "w", encoding="ascii", newline="\n") as f:
         f.write("\n".join(lines) + "\n")

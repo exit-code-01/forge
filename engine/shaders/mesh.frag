@@ -16,10 +16,12 @@ layout(set = 0, binding = 0) uniform FrameData {
 }
 frame;
 
-layout(set = 0, binding = 1) uniform sampler2D uAlbedo;
 // Comparison sampler: each tap returns 1 (lit) or 0 (occluded), and LINEAR
 // filtering on a shadow sampler gives hardware 2x2 PCF per tap for free.
-layout(set = 0, binding = 2) uniform sampler2DShadow uShadowMap;
+layout(set = 0, binding = 1) uniform sampler2DShadow uShadowMap;
+
+// Set 1 = per-MATERIAL (ADR-017): rebinds per draw, unlike set 0.
+layout(set = 1, binding = 0) uniform sampler2D uAlbedo;
 
 layout(location = 0) out vec4 outColor;
 

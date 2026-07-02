@@ -43,6 +43,22 @@ struct Vertex {
     glm::vec2 uv;
 };
 
+// Opaque GPU-resource handles (indices into renderer-owned tables).
+struct MeshHandle {
+    uint32_t value = 0;
+};
+struct TextureHandle {
+    uint32_t value = 0; // 0 is always the built-in checker (ADR-013)
+};
+
+// One draw: THIS mesh, THIS texture, THERE. The scene is a span of these —
+// a real scene graph is P7's business; the renderer only needs the list.
+struct DrawItem {
+    MeshHandle mesh;
+    TextureHandle texture;
+    glm::mat4 model{1.0f};
+};
+
 class Renderer {
 public:
     // Throws std::runtime_error if no eligible GPU / surface creation fails.
@@ -54,15 +70,26 @@ public:
     Renderer(Renderer&&) = delete;
     Renderer& operator=(Renderer&&) = delete;
 
-    // Blocking upload to GPU-local memory (staging copy). Load-time API.
-    // ONE mesh for now — replaced by real mesh handles with P5's asset
-    // pipeline; don't design the zoo before the first animal.
-    void uploadMesh(std::span<const Vertex> vertices, std::span<const uint32_t> indices);
+    // Blocking uploads to GPU-local memory (staging copy). Load-time API.
+    [[nodiscard]] MeshHandle addMesh(std::span<const Vertex> vertices,
+                                     std::span<const uint32_t> indices);
+    // rgba: 8-bit RGBA, row 0 = top, sRGB-authored (assets::ImageData fits).
+    [[nodiscard]] TextureHandle addTexture(uint32_t width, uint32_t height,
+                                           std::span<const uint8_t> rgba);
+    // The built-in checker placeholder — valid from construction.
+    [[nodiscard]] static TextureHandle defaultTexture() { return {0}; }
 
-    // Renders and presents one frame: shadow pass, then the scene. Every
-    // matrix draws THE mesh once (P5 brings real per-mesh handles). Safe to
-    // call when minimized (no-op) and before uploadMesh (clears only).
-    void drawFrame(const Camera& camera, std::span<const glm::mat4> modelMatrices);
+    // Hot-reload path (ADR-016): waits for the GPU, swaps the resource in
+    // place — every DrawItem referencing the handle sees the new data next
+    // frame. Load-time quality; async streaming is a P8+ topic.
+    void updateMesh(MeshHandle handle, std::span<const Vertex> vertices,
+                    std::span<const uint32_t> indices);
+    void updateTexture(TextureHandle handle, uint32_t width, uint32_t height,
+                       std::span<const uint8_t> rgba);
+
+    // Renders and presents one frame: shadow pass over all items, then the
+    // lit scene. Safe to call when minimized (no-op) or with an empty span.
+    void drawFrame(const Camera& camera, std::span<const DrawItem> items);
 
 private:
     struct Impl;

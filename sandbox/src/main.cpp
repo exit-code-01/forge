@@ -147,13 +147,25 @@ int main() {
         try {
             vulkan = std::make_unique<forge::VulkanContext>(window.requiredVulkanExtensions());
             renderer = std::make_unique<forge::Renderer>(window, *vulkan);
+        } catch (const std::exception& e) {
+            FORGE_WARN("renderer unavailable: {} — running windowed without rendering", e.what());
+        }
 
+        forge::MeshHandle cubeMesh{};
+        forge::MeshHandle torusMesh{};
+        forge::TextureHandle crateTexture{};
+        if (renderer) {
             std::vector<forge::Vertex> vertices;
             std::vector<uint32_t> indices;
             buildCube(vertices, indices);
-            renderer->uploadMesh(vertices, indices);
-        } catch (const std::exception& e) {
-            FORGE_WARN("renderer unavailable: {} — running windowed without rendering", e.what());
+            cubeMesh = renderer->addMesh(vertices, indices);
+
+            // The import path, end to end: file -> CPU data -> GPU handles.
+            const auto torusData = forge::assets::loadMesh("assets/models/torus.obj");
+            torusMesh = renderer->addMesh(torusData.vertices, torusData.indices);
+            const auto crateImage = forge::assets::loadImage("assets/textures/crate.png");
+            crateTexture =
+                renderer->addTexture(crateImage.width, crateImage.height, crateImage.rgba);
         }
 
         // Physics owns WHERE things are; rendering only asks. The mesh is a
@@ -164,6 +176,12 @@ int main() {
             physics.addBox({0.5f, 0.5f, 0.5f}, {0.0f, 3.0f, 0.0f}, forge::BodyType::Dynamic, 0.4f);
         const glm::mat4 groundOffset = glm::translate(glm::mat4(1.0f), {0.0f, -0.85f, 0.0f}) *
                                        glm::scale(glm::mat4(1.0f), {8.0f, 0.2f, 8.0f});
+
+        // The imported torus: static display piece resting on the slab, with
+        // a box collider so the kicked cube bounces off it.
+        const glm::vec3 torusPos{-1.6f, -0.5f, 0.3f};
+        physics.addBox({0.85f, 0.25f, 0.85f}, torusPos, forge::BodyType::Static);
+        const glm::mat4 torusModel = glm::translate(glm::mat4(1.0f), torusPos);
 
         // Framed so the full drop (y=3 down to the slab) stays in shot.
         const forge::Camera camera{.position = {4.2f, 2.6f, 5.2f}, .target = {0.0f, 0.6f, 0.0f}};
@@ -187,8 +205,13 @@ int main() {
             physics.update(dt);
 
             if (renderer) {
-                const std::array models{physics.bodyTransform(cubeBody), groundOffset};
-                renderer->drawFrame(camera, models);
+                const std::array items{
+                    forge::DrawItem{cubeMesh, forge::Renderer::defaultTexture(),
+                                    physics.bodyTransform(cubeBody)},
+                    forge::DrawItem{torusMesh, crateTexture, torusModel},
+                    forge::DrawItem{cubeMesh, forge::Renderer::defaultTexture(), groundOffset},
+                };
+                renderer->drawFrame(camera, items);
             }
         }
     } catch (const std::exception& e) {
