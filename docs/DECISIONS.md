@@ -293,3 +293,24 @@ declared contract; async streaming with per-frame retirement is P8+. The
 file WATCHER lives in the app, not the engine: polling mtimes every 500 ms
 is 3-platform-portable, imperceptibly latent, and treats a failed reload as
 "retry next poll" because tools write files non-atomically.
+
+## ADR-018 — Scripting: C++ owns machinery, Lua owns decisions; errors never kill the engine
+
+Lua 5.4.8 + sol2 v3.5.0 behind `forge::ScriptEngine` (pimpl; one TU includes
+Lua — the same seam as every subsystem before it). Lua is pinned to the
+OFFICIAL repo and we write the 8-line static-lib target ourselves rather
+than trusting a third-party CMake fork; sol2's template weather needs
+`/bigobj` on MSVC for exactly that one TU. The division of labor is the
+architecture: C++ owns everything real (memory, GPU, bodies), Lua owns
+DECISIONS — and the binding surface is chosen by VAULT's future puzzle
+vocabulary, not speculation: spawn a body, kick a body, read a body's
+position, read input. (A pressure plate is "is that body's position inside
+my box" — the primitives are already sufficient.) Error policy is the load-
+bearing decision: every load and call is protected; a broken script logs
+and the LAST GOOD functions stay live, runtime errors latch after one log
+line instead of spamming at 60 Hz, and the P5 FileWatcher makes scripts
+hot-swappable — save broken, read the error, save fixed, never restart.
+Structure is ONE scene script with onStart/onUpdate hooks; per-entity script
+components arrive with the editor (P7) when VAULT's rooms need them.
+Rendering of script-spawned bodies stays the HOST's business via a single
+onBoxSpawned hook — the engine does not decide what things look like.

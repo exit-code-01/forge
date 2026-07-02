@@ -39,7 +39,7 @@ sudo apt install xorg-dev libwayland-dev libxkbcommon-dev wayland-protocols
 - **P3** PBR forward renderer: texturing, basic lighting/shadows — ✅ done
 - **P4** Physics: Jolt integration, collision, rigidbodies — ✅ done
 - **P5** Asset pipeline: model/texture import, hot reload — ✅ done
-- **P6** Scripting: Lua bindings
+- **P6** Scripting: Lua bindings — ✅ done
 - **P7** Editor: scene hierarchy, inspector, gizmos (Dear ImGui)
 - **P8** Animation (skeletal), particles, audio
 - **P9** Networking basics (optional)
@@ -47,14 +47,16 @@ sudo apt install xorg-dev libwayland-dev libxkbcommon-dev wayland-protocols
 
 ## Status
 
-P5 complete — assets flow from disk to screen. Assimp (OBJ/glTF) and
-stb_image import into plain CPU data; the renderer serves real resource
-handles (meshes, textures, per-material descriptor sets); and hot reload
-watches the files — edit `assets/textures/crate.png` or regenerate
-`assets/models/torus.obj` while the sandbox runs and the change lands in
-about half a second, no restart. The demo scene: a crate-textured imported
-torus beside the physics cube, all PCF-shadowed, zero validation complaints
-(validation layer now active via the LunarG SDK). Next: P6 — Lua scripting.
+P6 complete — gameplay logic lives in Lua. `forge::ScriptEngine` (Lua 5.4.8
+via sol2) runs `assets/scripts/scene.lua` with onStart/onUpdate hooks and
+bindings shaped by the sample game's needs: spawn boxes, kick bodies, read
+positions, read input. Scripts hot-reload through the same watcher as
+textures and meshes — and a broken script never crashes the engine; the
+last good version keeps running while the error is on screen. The SPACE
+kick migrated from C++ to one line of Lua, and E rains crate boxes into
+the physics scene. Zero validation complaints. Next: P7 — the Dear ImGui
+editor (scene hierarchy, inspector, gizmos), where the engine starts
+building VAULT's rooms.
 
 ## Vulkan SDK
 
