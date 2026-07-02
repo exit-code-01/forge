@@ -59,9 +59,10 @@ public:
     // pipeline; don't design the zoo before the first animal.
     void uploadMesh(std::span<const Vertex> vertices, std::span<const uint32_t> indices);
 
-    // Renders and presents one frame. Safe to call when minimized (no-op)
-    // and before uploadMesh (clears to the background color).
-    void drawFrame(const Camera& camera, const glm::mat4& modelMatrix);
+    // Renders and presents one frame: shadow pass, then the scene. Every
+    // matrix draws THE mesh once (P5 brings real per-mesh handles). Safe to
+    // call when minimized (no-op) and before uploadMesh (clears only).
+    void drawFrame(const Camera& camera, std::span<const glm::mat4> modelMatrices);
 
 private:
     struct Impl;

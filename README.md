@@ -36,7 +36,7 @@ sudo apt install xorg-dev libwayland-dev libxkbcommon-dev wayland-protocols
 - **P0** Scope, repo, CMake build system — ✅ done
 - **P1** Platform layer: window, input, logging, math, ECS core — ✅ done
 - **P2** Renderer core: Vulkan init, swapchain, first triangle — ✅ done
-- **P3** PBR forward renderer: texturing, basic lighting/shadows — 🚧 geometry pipeline + Cook-Torrance direct lighting done; texturing, shadows remaining
+- **P3** PBR forward renderer: texturing, basic lighting/shadows — ✅ done
 - **P4** Physics: Jolt integration, collision, rigidbodies
 - **P5** Asset pipeline: model/texture import, hot reload
 - **P6** Scripting: Lua bindings
@@ -47,11 +47,11 @@ sudo apt install xorg-dev libwayland-dev libxkbcommon-dev wayland-protocols
 
 ## Status
 
-P3 in progress — a PBR-lit spinning cube renders: vertex/index buffers with
-staging upload, D32 depth buffer, camera + per-frame UBO via descriptor sets,
-per-draw push constants, and a Cook-Torrance directional light. Zero
-validation-layer complaints. Texturing and shadow mapping are next; then P4
-(Jolt physics).
+P3 complete — the forward renderer stands: Cook-Torrance PBR with a
+directional light, mip-mapped sRGB texturing (built-in checker albedo until
+P5's asset import), and 2048² PCF shadow mapping via a depth-only pre-pass.
+A textured cube spins over a ground slab and casts a soft shadow, with zero
+validation-layer complaints. Next: P4 — Jolt physics.
 
 ## Vulkan SDK
 

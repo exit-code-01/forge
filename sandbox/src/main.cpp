@@ -13,6 +13,7 @@
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/vec3.hpp>
 
+#include <array>
 #include <chrono>
 #include <exception>
 #include <memory>
@@ -107,7 +108,14 @@ int main() {
             FORGE_WARN("renderer unavailable: {} — running windowed without rendering", e.what());
         }
 
-        const forge::Camera camera{.position = {2.0f, 1.5f, 2.5f}, .target = {0.0f, 0.0f, 0.0f}};
+        // Pulled back and up so both the cube AND its shadow on the ground
+        // slab are in frame.
+        const forge::Camera camera{.position = {3.0f, 2.2f, 3.6f}, .target = {0.0f, -0.3f, 0.0f}};
+
+        // Ground: the same unit-cube mesh, squashed flat. Axis-aligned
+        // normals survive axis-aligned non-uniform scale after normalize().
+        const glm::mat4 groundModel = glm::translate(glm::mat4(1.0f), {0.0f, -0.85f, 0.0f}) *
+                                      glm::scale(glm::mat4(1.0f), {8.0f, 0.1f, 8.0f});
         const auto startTime = std::chrono::steady_clock::now();
 
         auto& input = window.input();
@@ -123,9 +131,10 @@ int main() {
                 const float t =
                     std::chrono::duration<float>(std::chrono::steady_clock::now() - startTime)
                         .count();
-                const glm::mat4 model =
+                const glm::mat4 cubeModel =
                     glm::rotate(glm::mat4(1.0f), t * glm::radians(45.0f), glm::vec3(0, 1, 0));
-                renderer->drawFrame(camera, model);
+                const std::array models{cubeModel, groundModel};
+                renderer->drawFrame(camera, models);
             }
         }
     } catch (const std::exception& e) {

@@ -205,3 +205,25 @@ and P5-era imported textures alike until a real asset cooker exists. Sampler
 anisotropy is off because it is a device *feature* we have not requested;
 that request belongs with P5's oblique-floor test scenes, where it earns its
 cost visibly.
+
+## ADR-014 — Shadows: one directional 2048² map, PCF, rasterizer depth bias
+
+Shadow mapping is the classic two-pass scheme: render scene depth from the
+light's point of view into an offscreen D32 map (a depth-only pipeline — one
+vertex shader, zero fragment stages, zero color attachments), then at shading
+time reproject each fragment into light space and hardware-compare its depth
+against the map. Policy decisions, each with its reason: (1) rasterizer-level
+*depth bias* (constant 1.25, slope 1.75) fixes acne at render time — it
+slope-scales per triangle, which no shader-side epsilon can do; (2) the
+comparison sampler uses LINEAR filtering (free hardware 2×2 PCF per tap) under
+a 3×3 kernel, and CLAMP_TO_BORDER with a *white* border so "beyond the map"
+reads as lit, never as a wall of shadow; (3) the shadow pass culls *nothing* —
+front-face culling (the usual peter-panning trick) leaks light through thin
+receivers like our ground slab, and the bias already covers acne; (4) the
+light's ortho box is fixed (±6, 0.1–20) because the demo scene is fixed —
+fitting it to a real scene's bounds, and cascades for large worlds, are
+documented follow-ups for when such scenes exist (P5+), not speculative code
+today; (5) NO Y-flip on the light matrix: the map is rendered and sampled
+through the same matrix, so the convention cancels — only the swapchain path
+flips (ADR-012). Shadows attenuate *direct* light only; ambient survives,
+because a shadow is the absence of one light, not the absence of light.

@@ -8,6 +8,7 @@ layout(location = 2) in vec2 inUv;
 
 layout(set = 0, binding = 0) uniform FrameData {
     mat4 viewProj;
+    mat4 lightViewProj;  // world -> light clip space (shadow map)
     vec4 cameraPos;      // xyz used
     vec4 lightDirection; // xyz: surface -> light, normalized
     vec4 lightColor;     // rgb * intensity

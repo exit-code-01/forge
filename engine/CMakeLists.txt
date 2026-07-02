@@ -6,6 +6,7 @@ include(${CMAKE_SOURCE_DIR}/cmake/EmbedShaders.cmake)
 forge_embed_spirv(${CMAKE_CURRENT_BINARY_DIR}/generated/forge_gen/MeshShaders.hpp
     kMeshVert ${CMAKE_CURRENT_SOURCE_DIR}/shaders/mesh.vert.spv
     kMeshFrag ${CMAKE_CURRENT_SOURCE_DIR}/shaders/mesh.frag.spv
+    kShadowVert ${CMAKE_CURRENT_SOURCE_DIR}/shaders/shadow.vert.spv
 )
 
 add_library(forge_engine STATIC
@@ -50,6 +51,8 @@ if(FORGE_GLSLC)
                 -o ${CMAKE_CURRENT_SOURCE_DIR}/shaders/mesh.vert.spv
         COMMAND ${FORGE_GLSLC} -O ${CMAKE_CURRENT_SOURCE_DIR}/shaders/mesh.frag
                 -o ${CMAKE_CURRENT_SOURCE_DIR}/shaders/mesh.frag.spv
+        COMMAND ${FORGE_GLSLC} -O ${CMAKE_CURRENT_SOURCE_DIR}/shaders/shadow.vert
+                -o ${CMAKE_CURRENT_SOURCE_DIR}/shaders/shadow.vert.spv
         COMMENT "Recompiling GLSL -> SPIR-V into the source tree (commit the result)"
     )
 endif()

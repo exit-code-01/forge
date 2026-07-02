@@ -32,15 +32,20 @@ namespace {
 // three adds latency, one serializes CPU and GPU.
 constexpr uint32_t kFramesInFlight = 2;
 
+// Directional shadow map resolution (ADR-014). One map, one light, until a
+// real scene demands cascades.
+constexpr uint32_t kShadowMapSize = 2048;
+
 // Per-frame GPU data (ADR-012). Layout mirrors the std140 block in
-// mesh.vert/frag: mat4 then vec4s — nothing that std140 would repack.
+// mesh.vert/frag: mat4s then vec4s — nothing that std140 would repack.
 struct FrameUbo {
     glm::mat4 viewProj;
+    glm::mat4 lightViewProj; // world -> light clip (shadow render AND sample)
     glm::vec4 cameraPos;
     glm::vec4 lightDirection; // xyz: surface -> light, normalized
     glm::vec4 lightColor;     // rgb * intensity
 };
-static_assert(sizeof(FrameUbo) == 112, "must match the std140 block in mesh shaders");
+static_assert(sizeof(FrameUbo) == 176, "must match the std140 block in mesh shaders");
 
 // The REAL pixel size right now (HiDPI-safe, unlike the cached WindowDesc
 // size). {0,0} while minimized — the caller must skip the frame.
@@ -88,6 +93,53 @@ VkFormat findDepthFormat(VkPhysicalDevice gpu) {
 
 bool formatHasStencil(VkFormat format) {
     return format == VK_FORMAT_D32_SFLOAT_S8_UINT || format == VK_FORMAT_D24_UNORM_S8_UINT;
+}
+
+// Device-local 2D image + memory (depth buffer, shadow map). Throws on failure.
+void allocateImage(const VulkanDevice& device, uint32_t width, uint32_t height, VkFormat format,
+                   VkImageUsageFlags usage, VkImage& outImage, VkDeviceMemory& outMemory) {
+    const VkDevice dev = device.device();
+    VkImageCreateInfo imageInfo{};
+    imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+    imageInfo.imageType = VK_IMAGE_TYPE_2D;
+    imageInfo.format = format;
+    imageInfo.extent = {width, height, 1};
+    imageInfo.mipLevels = 1;
+    imageInfo.arrayLayers = 1;
+    imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+    imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
+    imageInfo.usage = usage;
+    imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    if (vkCreateImage(dev, &imageInfo, nullptr, &outImage) != VK_SUCCESS) {
+        throw std::runtime_error("vkCreateImage failed");
+    }
+
+    VkMemoryRequirements requirements{};
+    vkGetImageMemoryRequirements(dev, outImage, &requirements);
+    VkPhysicalDeviceMemoryProperties memProps{};
+    vkGetPhysicalDeviceMemoryProperties(device.physical(), &memProps);
+    uint32_t typeIndex = UINT32_MAX;
+    for (uint32_t i = 0; i < memProps.memoryTypeCount; ++i) {
+        const bool allowed = (requirements.memoryTypeBits & (1u << i)) != 0;
+        const bool local =
+            (memProps.memoryTypes[i].propertyFlags & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) != 0;
+        if (allowed && local) {
+            typeIndex = i;
+            break;
+        }
+    }
+    if (typeIndex == UINT32_MAX) {
+        throw std::runtime_error("no device-local memory for image");
+    }
+    VkMemoryAllocateInfo allocInfo{};
+    allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    allocInfo.allocationSize = requirements.size;
+    allocInfo.memoryTypeIndex = typeIndex;
+    if (vkAllocateMemory(dev, &allocInfo, nullptr, &outMemory) != VK_SUCCESS) {
+        vkDestroyImage(dev, outImage, nullptr);
+        throw std::runtime_error("vkAllocateMemory (image) failed");
+    }
+    vkBindImageMemory(dev, outImage, outMemory, 0);
 }
 
 // Whole-image transition; the mip-aware version lives in vkutil (shared with
@@ -145,8 +197,15 @@ struct Renderer::Impl {
     // Built-in placeholder albedo until P5 brings real assets (ADR-013).
     std::unique_ptr<VulkanTexture> albedoTexture;
 
+    // Directional shadow map (ADR-014): persistent, NOT tied to the swapchain.
+    VkImage shadowImage = VK_NULL_HANDLE;
+    VkDeviceMemory shadowMemory = VK_NULL_HANDLE;
+    VkImageView shadowView = VK_NULL_HANDLE;
+    VkSampler shadowSampler = VK_NULL_HANDLE; // comparison sampler (PCF)
+
     VkPipelineLayout pipelineLayout = VK_NULL_HANDLE;
     VkPipeline pipeline = VK_NULL_HANDLE;
+    VkPipeline shadowPipeline = VK_NULL_HANDLE; // depth-only, light's POV
     VkCommandPool commandPool = VK_NULL_HANDLE;
 
     // The one mesh (see uploadMesh contract in the header).
@@ -169,59 +228,22 @@ struct Renderer::Impl {
 
     void createDepthResources();
     void destroyDepthResources();
+    void createShadowResources();
     void createDescriptors();
     void createPipeline();
+    void createShadowPipeline();
     void createFrameObjects();
     void createImageSemaphores();
     void recreateSwapchain();
     void record(VkCommandBuffer cmd, uint32_t imageIndex, uint32_t frame,
-                const glm::mat4& model) const;
+                std::span<const glm::mat4> models) const;
 };
 
 void Renderer::Impl::createDepthResources() {
     const VkDevice dev = device->device();
     depthFormat = findDepthFormat(device->physical());
-
-    VkImageCreateInfo imageInfo{};
-    imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
-    imageInfo.imageType = VK_IMAGE_TYPE_2D;
-    imageInfo.format = depthFormat;
-    imageInfo.extent = {swapchain->extent().width, swapchain->extent().height, 1};
-    imageInfo.mipLevels = 1;
-    imageInfo.arrayLayers = 1;
-    imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
-    imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
-    imageInfo.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
-    imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-    if (vkCreateImage(dev, &imageInfo, nullptr, &depthImage) != VK_SUCCESS) {
-        throw std::runtime_error("vkCreateImage (depth) failed");
-    }
-
-    VkMemoryRequirements requirements{};
-    vkGetImageMemoryRequirements(dev, depthImage, &requirements);
-    VkPhysicalDeviceMemoryProperties memProps{};
-    vkGetPhysicalDeviceMemoryProperties(device->physical(), &memProps);
-    uint32_t typeIndex = UINT32_MAX;
-    for (uint32_t i = 0; i < memProps.memoryTypeCount; ++i) {
-        const bool allowed = (requirements.memoryTypeBits & (1u << i)) != 0;
-        const bool local =
-            (memProps.memoryTypes[i].propertyFlags & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) != 0;
-        if (allowed && local) {
-            typeIndex = i;
-            break;
-        }
-    }
-    if (typeIndex == UINT32_MAX) {
-        throw std::runtime_error("no device-local memory for depth buffer");
-    }
-    VkMemoryAllocateInfo allocInfo{};
-    allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-    allocInfo.allocationSize = requirements.size;
-    allocInfo.memoryTypeIndex = typeIndex;
-    if (vkAllocateMemory(dev, &allocInfo, nullptr, &depthMemory) != VK_SUCCESS) {
-        throw std::runtime_error("vkAllocateMemory (depth) failed");
-    }
-    vkBindImageMemory(dev, depthImage, depthMemory, 0);
+    allocateImage(*device, swapchain->extent().width, swapchain->extent().height, depthFormat,
+                  VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT, depthImage, depthMemory);
 
     VkImageAspectFlags aspect = VK_IMAGE_ASPECT_DEPTH_BIT;
     if (formatHasStencil(depthFormat)) {
@@ -235,6 +257,42 @@ void Renderer::Impl::createDepthResources() {
     viewInfo.subresourceRange = {aspect, 0, 1, 0, 1};
     if (vkCreateImageView(dev, &viewInfo, nullptr, &depthView) != VK_SUCCESS) {
         throw std::runtime_error("vkCreateImageView (depth) failed");
+    }
+}
+
+void Renderer::Impl::createShadowResources() {
+    const VkDevice dev = device->device();
+    // D32 unconditionally: findDepthFormat proved depth support exists, and
+    // every desktop GPU we admit (1.3+) samples D32.
+    allocateImage(*device, kShadowMapSize, kShadowMapSize, VK_FORMAT_D32_SFLOAT,
+                  VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+                  shadowImage, shadowMemory);
+
+    VkImageViewCreateInfo viewInfo{};
+    viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+    viewInfo.image = shadowImage;
+    viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+    viewInfo.format = VK_FORMAT_D32_SFLOAT;
+    viewInfo.subresourceRange = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, 1};
+    if (vkCreateImageView(dev, &viewInfo, nullptr, &shadowView) != VK_SUCCESS) {
+        throw std::runtime_error("vkCreateImageView (shadow) failed");
+    }
+
+    // Comparison sampler: LINEAR + compare = hardware 2x2 PCF per tap.
+    // CLAMP_TO_BORDER with a WHITE border reads "beyond the map = lit".
+    VkSamplerCreateInfo samplerInfo{};
+    samplerInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+    samplerInfo.magFilter = VK_FILTER_LINEAR;
+    samplerInfo.minFilter = VK_FILTER_LINEAR;
+    samplerInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+    samplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER;
+    samplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER;
+    samplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER;
+    samplerInfo.borderColor = VK_BORDER_COLOR_FLOAT_OPAQUE_WHITE;
+    samplerInfo.compareEnable = VK_TRUE;
+    samplerInfo.compareOp = VK_COMPARE_OP_LESS_OR_EQUAL; // lit if ref <= stored
+    if (vkCreateSampler(dev, &samplerInfo, nullptr, &shadowSampler) != VK_SUCCESS) {
+        throw std::runtime_error("vkCreateSampler (shadow) failed");
     }
 }
 
@@ -252,7 +310,8 @@ void Renderer::Impl::createDescriptors() {
     const VkDevice dev = device->device();
 
     // Binding 0: per-frame UBO (both stages). Binding 1: albedo texture.
-    VkDescriptorSetLayoutBinding bindings[2]{};
+    // Binding 2: shadow map (comparison sampler).
+    VkDescriptorSetLayoutBinding bindings[3]{};
     bindings[0].binding = 0;
     bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
     bindings[0].descriptorCount = 1;
@@ -261,9 +320,13 @@ void Renderer::Impl::createDescriptors() {
     bindings[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     bindings[1].descriptorCount = 1;
     bindings[1].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    bindings[2].binding = 2;
+    bindings[2].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    bindings[2].descriptorCount = 1;
+    bindings[2].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
     VkDescriptorSetLayoutCreateInfo layoutInfo{};
     layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-    layoutInfo.bindingCount = 2;
+    layoutInfo.bindingCount = 3;
     layoutInfo.pBindings = bindings;
     if (vkCreateDescriptorSetLayout(dev, &layoutInfo, nullptr, &descriptorLayout) != VK_SUCCESS) {
         throw std::runtime_error("vkCreateDescriptorSetLayout failed");
@@ -271,7 +334,7 @@ void Renderer::Impl::createDescriptors() {
 
     VkDescriptorPoolSize poolSizes[2]{};
     poolSizes[0] = {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, kFramesInFlight};
-    poolSizes[1] = {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, kFramesInFlight};
+    poolSizes[1] = {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 2 * kFramesInFlight};
     VkDescriptorPoolCreateInfo poolInfo{};
     poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
     poolInfo.maxSets = kFramesInFlight;
@@ -299,9 +362,11 @@ void Renderer::Impl::createDescriptors() {
             GpuBuffer(*device, sizeof(FrameUbo), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
                       VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
         VkDescriptorBufferInfo bufferInfo{frameUbos[i].handle(), 0, sizeof(FrameUbo)};
-        VkDescriptorImageInfo imageInfo{albedoTexture->sampler(), albedoTexture->view(),
-                                        VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
-        VkWriteDescriptorSet writes[2]{};
+        VkDescriptorImageInfo albedoInfo{albedoTexture->sampler(), albedoTexture->view(),
+                                         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+        VkDescriptorImageInfo shadowInfo{shadowSampler, shadowView,
+                                         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+        VkWriteDescriptorSet writes[3]{};
         writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         writes[0].dstSet = descriptorSets[i];
         writes[0].dstBinding = 0;
@@ -313,8 +378,14 @@ void Renderer::Impl::createDescriptors() {
         writes[1].dstBinding = 1;
         writes[1].descriptorCount = 1;
         writes[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        writes[1].pImageInfo = &imageInfo;
-        vkUpdateDescriptorSets(dev, 2, writes, 0, nullptr);
+        writes[1].pImageInfo = &albedoInfo;
+        writes[2].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[2].dstSet = descriptorSets[i];
+        writes[2].dstBinding = 2;
+        writes[2].descriptorCount = 1;
+        writes[2].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        writes[2].pImageInfo = &shadowInfo;
+        vkUpdateDescriptorSets(dev, 3, writes, 0, nullptr);
     }
 }
 
@@ -446,6 +517,99 @@ void Renderer::Impl::createPipeline() {
     }
 }
 
+void Renderer::Impl::createShadowPipeline() {
+    const VkDevice dev = device->device();
+    const VkShaderModule vert =
+        makeShaderModule(dev, shaders::kShadowVert, sizeof(shaders::kShadowVert));
+
+    // ONE stage: no fragment shader — the depth write is the whole job.
+    VkPipelineShaderStageCreateInfo stage{};
+    stage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    stage.stage = VK_SHADER_STAGE_VERTEX_BIT;
+    stage.module = vert;
+    stage.pName = "main";
+
+    // Same vertex buffer, but the shader consumes only position.
+    VkVertexInputBindingDescription bindingDesc{};
+    bindingDesc.binding = 0;
+    bindingDesc.stride = sizeof(Vertex);
+    bindingDesc.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
+    VkVertexInputAttributeDescription attribute{0, 0, VK_FORMAT_R32G32B32_SFLOAT,
+                                                offsetof(Vertex, position)};
+    VkPipelineVertexInputStateCreateInfo vertexInput{};
+    vertexInput.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+    vertexInput.vertexBindingDescriptionCount = 1;
+    vertexInput.pVertexBindingDescriptions = &bindingDesc;
+    vertexInput.vertexAttributeDescriptionCount = 1;
+    vertexInput.pVertexAttributeDescriptions = &attribute;
+
+    VkPipelineInputAssemblyStateCreateInfo inputAssembly{};
+    inputAssembly.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
+    inputAssembly.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+
+    VkPipelineViewportStateCreateInfo viewportState{};
+    viewportState.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
+    viewportState.viewportCount = 1;
+    viewportState.scissorCount = 1;
+    constexpr VkDynamicState dynamicStates[] = {VK_DYNAMIC_STATE_VIEWPORT,
+                                                VK_DYNAMIC_STATE_SCISSOR};
+    VkPipelineDynamicStateCreateInfo dynamic{};
+    dynamic.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
+    dynamic.dynamicStateCount = 2;
+    dynamic.pDynamicStates = dynamicStates;
+
+    VkPipelineRasterizationStateCreateInfo raster{};
+    raster.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
+    raster.polygonMode = VK_POLYGON_MODE_FILL;
+    // No culling: thin receivers (the ground slab) leak light if we cull the
+    // "wrong" side, and the depth bias below already handles acne.
+    raster.cullMode = VK_CULL_MODE_NONE;
+    raster.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+    // Rasterizer-level depth bias: the canonical acne fix. Bias at RENDER
+    // time beats shader-side epsilon because it slope-scales per triangle.
+    raster.depthBiasEnable = VK_TRUE;
+    raster.depthBiasConstantFactor = 1.25f;
+    raster.depthBiasSlopeFactor = 1.75f;
+    raster.lineWidth = 1.0f;
+
+    VkPipelineMultisampleStateCreateInfo multisample{};
+    multisample.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
+    multisample.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+
+    VkPipelineDepthStencilStateCreateInfo depthStencil{};
+    depthStencil.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
+    depthStencil.depthTestEnable = VK_TRUE;
+    depthStencil.depthWriteEnable = VK_TRUE;
+    depthStencil.depthCompareOp = VK_COMPARE_OP_LESS;
+
+    // Zero color attachments; same pipelineLayout so descriptor sets bind
+    // identically across both passes.
+    VkPipelineRenderingCreateInfo rendering{};
+    rendering.sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO;
+    rendering.depthAttachmentFormat = VK_FORMAT_D32_SFLOAT;
+
+    VkGraphicsPipelineCreateInfo pipelineInfo{};
+    pipelineInfo.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+    pipelineInfo.pNext = &rendering;
+    pipelineInfo.stageCount = 1;
+    pipelineInfo.pStages = &stage;
+    pipelineInfo.pVertexInputState = &vertexInput;
+    pipelineInfo.pInputAssemblyState = &inputAssembly;
+    pipelineInfo.pViewportState = &viewportState;
+    pipelineInfo.pRasterizationState = &raster;
+    pipelineInfo.pMultisampleState = &multisample;
+    pipelineInfo.pDepthStencilState = &depthStencil;
+    pipelineInfo.pDynamicState = &dynamic;
+    pipelineInfo.layout = pipelineLayout;
+
+    const VkResult result =
+        vkCreateGraphicsPipelines(dev, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &shadowPipeline);
+    vkDestroyShaderModule(dev, vert, nullptr);
+    if (result != VK_SUCCESS) {
+        throw std::runtime_error("vkCreateGraphicsPipelines (shadow) failed");
+    }
+}
+
 void Renderer::Impl::createFrameObjects() {
     const VkDevice dev = device->device();
 
@@ -503,11 +667,70 @@ void Renderer::Impl::recreateSwapchain() {
 }
 
 void Renderer::Impl::record(VkCommandBuffer cmd, uint32_t imageIndex, uint32_t frame,
-                            const glm::mat4& model) const {
+                            std::span<const glm::mat4> models) const {
     VkCommandBufferBeginInfo beginInfo{};
     beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
     vkBeginCommandBuffer(cmd, &beginInfo);
 
+    const VkBuffer vb = vertexBuffer.handle();
+    const VkDeviceSize vbOffset = 0;
+
+    // ---- Pass 1: shadow map, from the light's point of view (ADR-014).
+    // UNDEFINED discard is fine (cleared every frame) and doubles as the
+    // frame-N/N+1 execution barrier on the shared map.
+    transitionImage(
+        cmd, shadowImage, VK_IMAGE_ASPECT_DEPTH_BIT, VK_IMAGE_LAYOUT_UNDEFINED,
+        VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
+        VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT |
+            VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
+        VK_ACCESS_2_NONE,
+        VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT,
+        VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT |
+            VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT);
+
+    VkRenderingAttachmentInfo shadowDepth{};
+    shadowDepth.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+    shadowDepth.imageView = shadowView;
+    shadowDepth.imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+    shadowDepth.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+    shadowDepth.storeOp = VK_ATTACHMENT_STORE_OP_STORE; // sampled by pass 2
+    shadowDepth.clearValue.depthStencil = {1.0f, 0};
+
+    VkRenderingInfo shadowRendering{};
+    shadowRendering.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
+    shadowRendering.renderArea = {{0, 0}, {kShadowMapSize, kShadowMapSize}};
+    shadowRendering.layerCount = 1;
+    shadowRendering.pDepthAttachment = &shadowDepth;
+
+    vkCmdBeginRendering(cmd, &shadowRendering);
+    const VkViewport shadowViewport{
+        0.0f, 0.0f, static_cast<float>(kShadowMapSize), static_cast<float>(kShadowMapSize),
+        0.0f, 1.0f};
+    const VkRect2D shadowScissor{{0, 0}, {kShadowMapSize, kShadowMapSize}};
+    vkCmdSetViewport(cmd, 0, 1, &shadowViewport);
+    vkCmdSetScissor(cmd, 0, 1, &shadowScissor);
+    if (indexCount > 0 && !models.empty()) {
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, shadowPipeline);
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout, 0, 1,
+                                &descriptorSets[frame], 0, nullptr);
+        vkCmdBindVertexBuffers(cmd, 0, 1, &vb, &vbOffset);
+        vkCmdBindIndexBuffer(cmd, indexBuffer.handle(), 0, VK_INDEX_TYPE_UINT32);
+        for (const glm::mat4& model : models) {
+            vkCmdPushConstants(cmd, pipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0,
+                               sizeof(glm::mat4), &model);
+            vkCmdDrawIndexed(cmd, indexCount, 1, 0, 0, 0);
+        }
+    }
+    vkCmdEndRendering(cmd);
+
+    // Depth writes done -> fragment shader reads (pass 2 samples the map).
+    transitionImage(
+        cmd, shadowImage, VK_IMAGE_ASPECT_DEPTH_BIT, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
+        VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT,
+        VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT, VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
+        VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+
+    // ---- Pass 2: the scene, from the camera.
     // Swapchain image arrives in UNDEFINED; make it a color attachment.
     transitionImage(cmd, swapchain->image(imageIndex), VK_IMAGE_ASPECT_COLOR_BIT,
                     VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
@@ -564,17 +787,17 @@ void Renderer::Impl::record(VkCommandBuffer cmd, uint32_t imageIndex, uint32_t f
     vkCmdSetViewport(cmd, 0, 1, &viewport);
     vkCmdSetScissor(cmd, 0, 1, &scissor);
 
-    if (indexCount > 0) {
+    if (indexCount > 0 && !models.empty()) {
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout, 0, 1,
                                 &descriptorSets[frame], 0, nullptr);
-        vkCmdPushConstants(cmd, pipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(glm::mat4),
-                           &model);
-        const VkBuffer vb = vertexBuffer.handle();
-        const VkDeviceSize offset = 0;
-        vkCmdBindVertexBuffers(cmd, 0, 1, &vb, &offset);
+        vkCmdBindVertexBuffers(cmd, 0, 1, &vb, &vbOffset);
         vkCmdBindIndexBuffer(cmd, indexBuffer.handle(), 0, VK_INDEX_TYPE_UINT32);
-        vkCmdDrawIndexed(cmd, indexCount, 1, 0, 0, 0);
+        for (const glm::mat4& model : models) {
+            vkCmdPushConstants(cmd, pipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0,
+                               sizeof(glm::mat4), &model);
+            vkCmdDrawIndexed(cmd, indexCount, 1, 0, 0, 0);
+        }
     }
     vkCmdEndRendering(cmd);
 
@@ -605,12 +828,14 @@ Renderer::Renderer(Window& window, VulkanContext& context)
     m_impl->createFrameObjects(); // command pool first: texture upload needs it
     m_impl->albedoTexture = std::make_unique<VulkanTexture>(*m_impl->device, m_impl->commandPool,
                                                             256, 256, makeCheckerTexels(256, 32));
+    m_impl->createShadowResources();
     m_impl->createDescriptors();
     m_impl->createPipeline();
+    m_impl->createShadowPipeline();
     FORGE_INFO("renderer ready: dynamic rendering, depth {}, {} frames in flight, "
-               "256x256 checker albedo (9 mips)",
+               "256x256 checker albedo (9 mips), {}x{} shadow map",
                m_impl->depthFormat == VK_FORMAT_D32_SFLOAT ? "D32_SFLOAT" : "D+S fallback",
-               kFramesInFlight);
+               kFramesInFlight, kShadowMapSize, kShadowMapSize);
 }
 
 Renderer::~Renderer() {
@@ -626,9 +851,14 @@ Renderer::~Renderer() {
         }
         vkDestroyCommandPool(dev, m_impl->commandPool, nullptr);
         vkDestroyPipeline(dev, m_impl->pipeline, nullptr);
+        vkDestroyPipeline(dev, m_impl->shadowPipeline, nullptr);
         vkDestroyPipelineLayout(dev, m_impl->pipelineLayout, nullptr);
         vkDestroyDescriptorPool(dev, m_impl->descriptorPool, nullptr); // frees the sets
         vkDestroyDescriptorSetLayout(dev, m_impl->descriptorLayout, nullptr);
+        vkDestroySampler(dev, m_impl->shadowSampler, nullptr);
+        vkDestroyImageView(dev, m_impl->shadowView, nullptr);
+        vkDestroyImage(dev, m_impl->shadowImage, nullptr);
+        vkFreeMemory(dev, m_impl->shadowMemory, nullptr);
         m_impl->albedoTexture.reset();
         m_impl->vertexBuffer = GpuBuffer{};
         m_impl->indexBuffer = GpuBuffer{};
@@ -670,7 +900,7 @@ void Renderer::uploadMesh(std::span<const Vertex> vertices, std::span<const uint
                indices.size(), (vertexBytes + indexBytes + 1023) / 1024);
 }
 
-void Renderer::drawFrame(const Camera& camera, const glm::mat4& modelMatrix) {
+void Renderer::drawFrame(const Camera& camera, std::span<const glm::mat4> modelMatrices) {
     Impl& impl = *m_impl;
     const VkDevice dev = impl.device->device();
 
@@ -707,10 +937,20 @@ void Renderer::drawFrame(const Camera& camera, const glm::mat4& modelMatrix) {
     glm::mat4 proj = glm::perspective(glm::radians(camera.fovYDegrees), aspect, camera.nearPlane,
                                       camera.farPlane);
     proj[1][1] *= -1.0f; // GL's Y-up clip space -> Vulkan's Y-down (ADR-012)
+
+    // Light matrices (ADR-014): ortho box around the demo scene, eye pushed
+    // back along the light direction. NO Y-flip here — the shadow map is
+    // rendered AND sampled through this same matrix, so the convention
+    // cancels out; only the swapchain path needs the flip.
+    const glm::vec3 lightDir = glm::normalize(glm::vec3(0.5f, 0.8f, 0.35f));
+    const glm::mat4 lightView = glm::lookAt(lightDir * 10.0f, glm::vec3(0.0f), glm::vec3(0, 1, 0));
+    const glm::mat4 lightProj = glm::ortho(-6.0f, 6.0f, -6.0f, 6.0f, 0.1f, 20.0f);
+
     FrameUbo ubo{};
     ubo.viewProj = proj * view;
+    ubo.lightViewProj = lightProj * lightView;
     ubo.cameraPos = glm::vec4(camera.position, 1.0f);
-    ubo.lightDirection = glm::vec4(glm::normalize(glm::vec3(0.4f, 1.0f, 0.3f)), 0.0f);
+    ubo.lightDirection = glm::vec4(lightDir, 0.0f);
     ubo.lightColor = glm::vec4(3.0f, 2.9f, 2.7f, 1.0f); // warm key light, HDR intensity
     impl.frameUbos[frame].writeBytes(&ubo, sizeof(ubo));
 
@@ -719,7 +959,7 @@ void Renderer::drawFrame(const Camera& camera, const glm::mat4& modelMatrix) {
 
     const VkCommandBuffer cmd = impl.commandBuffers[frame];
     vkResetCommandBuffer(cmd, 0);
-    impl.record(cmd, imageIndex, frame, modelMatrix);
+    impl.record(cmd, imageIndex, frame, modelMatrices);
 
     VkSemaphoreSubmitInfo waitInfo{};
     waitInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO;
