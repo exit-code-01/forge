@@ -165,3 +165,24 @@ recompiles GLSL → SPIR-V into the source tree, and the result gets committed
 like any other change. This scheme is for the engine's own built-in shaders;
 P5's asset pipeline owns user/game shaders and hot reload, and will replace
 none of it.
+
+## ADR-012 — Shader data policy and clip-space conventions live in ONE place
+
+How data reaches shaders is a policy, not an ad-hoc choice per call site:
+*per-frame* data (camera matrix, lights) goes in one persistently-mapped
+uniform buffer per frame-in-flight, bound as descriptor set 0 — the fence that
+guards the frame slot also makes its UBO safely writable, no extra sync;
+*per-draw* data (model matrix) goes in push constants, staying within the
+128-byte floor Vulkan guarantees (a mat4 is 64 — relying on the common 256 is
+how you ship something that breaks on someone else's GPU); *per-mesh* data
+(vertices/indices) is device-local, filled once through a staging buffer at
+load time. Vulkan's clip-space differences from OpenGL are centralized in the
+Renderer and nowhere else: `GLM_FORCE_DEPTH_ZERO_TO_ONE` is defined on the glm
+*target* (a partial define is an ODR bug that renders as subtly-wrong depth),
+the projection Y-flip (`proj[1][1] *= -1`) happens inside `drawFrame`, and the
+resulting front-face winding (COUNTER_CLOCKWISE for CCW-authored geometry —
+*empirically verified by painting normals as colors*, after a confident paper
+derivation of CLOCKWISE shipped an inside-out cube) is set in exactly one
+pipeline. Apps hand the engine a `Camera` and never learn Vulkan's axes.
+Allocation stays raw vkAllocateMemory per buffer; VMA is the documented
+trigger point when P5 asset streaming multiplies allocation counts.

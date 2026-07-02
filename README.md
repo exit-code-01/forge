@@ -36,7 +36,7 @@ sudo apt install xorg-dev libwayland-dev libxkbcommon-dev wayland-protocols
 - **P0** Scope, repo, CMake build system — ✅ done
 - **P1** Platform layer: window, input, logging, math, ECS core — ✅ done
 - **P2** Renderer core: Vulkan init, swapchain, first triangle — ✅ done
-- **P3** PBR forward renderer: texturing, basic lighting/shadows
+- **P3** PBR forward renderer: texturing, basic lighting/shadows — 🚧 geometry pipeline + Cook-Torrance direct lighting done; texturing, shadows remaining
 - **P4** Physics: Jolt integration, collision, rigidbodies
 - **P5** Asset pipeline: model/texture import, hot reload
 - **P6** Scripting: Lua bindings
@@ -47,11 +47,11 @@ sudo apt install xorg-dev libwayland-dev libxkbcommon-dev wayland-protocols
 
 ## Status
 
-P2 complete — the first triangle renders. The stack: instance via volk, scored
-physical-device selection (Vulkan 1.3 minimum), swapchain (SRGB, FIFO),
-dynamic rendering + synchronization2 (no render-pass objects anywhere), two
-frames in flight, embedded SPIR-V shaders. Zero validation-layer complaints.
-Next: P3, the PBR forward renderer.
+P3 in progress — a PBR-lit spinning cube renders: vertex/index buffers with
+staging upload, D32 depth buffer, camera + per-frame UBO via descriptor sets,
+per-draw push constants, and a Cook-Torrance directional light. Zero
+validation-layer complaints. Texturing and shadow mapping are next; then P4
+(Jolt physics).
 
 ## Vulkan SDK
 

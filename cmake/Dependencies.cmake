@@ -30,6 +30,10 @@ set_target_properties(glm PROPERTIES
     INTERFACE_SYSTEM_INCLUDE_DIRECTORIES
     "$<TARGET_PROPERTY:glm,INTERFACE_INCLUDE_DIRECTORIES>"
 )
+# GLM defaults to OpenGL's -1..1 clip-space depth; Vulkan uses 0..1. Set on
+# the TARGET (not per-file) so every TU in every consumer agrees — a partial
+# define here is an ODR bug that renders as "shadows/depth subtly wrong."
+target_compile_definitions(glm INTERFACE GLM_FORCE_DEPTH_ZERO_TO_ONE)
 
 # ---- Vulkan-Headers + volk (P2.0) — consumed by: engine/src/renderer
 # volk dlopens the Vulkan loader at RUNTIME, so building the repo never

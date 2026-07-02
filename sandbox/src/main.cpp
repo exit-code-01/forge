@@ -10,10 +10,13 @@
 #include "forge/renderer/Renderer.hpp"
 #include "forge/renderer/VulkanContext.hpp"
 
+#include <glm/gtc/matrix_transform.hpp>
 #include <glm/vec3.hpp>
 
+#include <chrono>
 #include <exception>
 #include <memory>
+#include <vector>
 
 namespace {
 
@@ -53,6 +56,30 @@ void ecsDemo() {
                d.index, d.generation, registry.alive(b));
 }
 
+// Unit cube, 24 vertices (4 per face so normals are hard), 36 indices.
+// Faces are wound CCW seen from OUTSIDE; u cross v == n keeps that true.
+void appendFace(std::vector<forge::Vertex>& vertices, std::vector<uint32_t>& indices, glm::vec3 n,
+                glm::vec3 u, glm::vec3 v) {
+    const auto base = static_cast<uint32_t>(vertices.size());
+    vertices.push_back({(n - u - v) * 0.5f, n});
+    vertices.push_back({(n + u - v) * 0.5f, n});
+    vertices.push_back({(n + u + v) * 0.5f, n});
+    vertices.push_back({(n - u + v) * 0.5f, n});
+    indices.insert(indices.end(), {base, base + 1, base + 2, base + 2, base + 3, base});
+}
+
+void buildCube(std::vector<forge::Vertex>& vertices, std::vector<uint32_t>& indices) {
+    const glm::vec3 x{1, 0, 0};
+    const glm::vec3 y{0, 1, 0};
+    const glm::vec3 z{0, 0, 1};
+    appendFace(vertices, indices, z, x, y);   // +Z
+    appendFace(vertices, indices, -z, -x, y); // -Z
+    appendFace(vertices, indices, x, -z, y);  // +X
+    appendFace(vertices, indices, -x, z, y);  // -X
+    appendFace(vertices, indices, y, x, -z);  // +Y
+    appendFace(vertices, indices, -y, x, z);  // -Y
+}
+
 } // namespace
 
 int main() {
@@ -71,9 +98,17 @@ int main() {
         try {
             vulkan = std::make_unique<forge::VulkanContext>(window.requiredVulkanExtensions());
             renderer = std::make_unique<forge::Renderer>(window, *vulkan);
+
+            std::vector<forge::Vertex> vertices;
+            std::vector<uint32_t> indices;
+            buildCube(vertices, indices);
+            renderer->uploadMesh(vertices, indices);
         } catch (const std::exception& e) {
             FORGE_WARN("renderer unavailable: {} — running windowed without rendering", e.what());
         }
+
+        const forge::Camera camera{.position = {2.0f, 1.5f, 2.5f}, .target = {0.0f, 0.0f, 0.0f}};
+        const auto startTime = std::chrono::steady_clock::now();
 
         auto& input = window.input();
         while (!window.shouldClose()) {
@@ -85,7 +120,12 @@ int main() {
                 FORGE_INFO("space at ({:.0f}, {:.0f})", input.mouseX(), input.mouseY());
             }
             if (renderer) {
-                renderer->drawFrame();
+                const float t =
+                    std::chrono::duration<float>(std::chrono::steady_clock::now() - startTime)
+                        .count();
+                const glm::mat4 model =
+                    glm::rotate(glm::mat4(1.0f), t * glm::radians(45.0f), glm::vec3(0, 1, 0));
+                renderer->drawFrame(camera, model);
             }
         }
     } catch (const std::exception& e) {

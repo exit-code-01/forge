@@ -3,9 +3,9 @@
 # Checked-in SPIR-V -> generated header (ADR-011). Building needs NO Vulkan
 # SDK; the .spv artifacts are the committed source of truth for CI.
 include(${CMAKE_SOURCE_DIR}/cmake/EmbedShaders.cmake)
-forge_embed_spirv(${CMAKE_CURRENT_BINARY_DIR}/generated/forge_gen/TriangleShaders.hpp
-    kTriangleVert ${CMAKE_CURRENT_SOURCE_DIR}/shaders/triangle.vert.spv
-    kTriangleFrag ${CMAKE_CURRENT_SOURCE_DIR}/shaders/triangle.frag.spv
+forge_embed_spirv(${CMAKE_CURRENT_BINARY_DIR}/generated/forge_gen/MeshShaders.hpp
+    kMeshVert ${CMAKE_CURRENT_SOURCE_DIR}/shaders/mesh.vert.spv
+    kMeshFrag ${CMAKE_CURRENT_SOURCE_DIR}/shaders/mesh.frag.spv
 )
 
 add_library(forge_engine STATIC
@@ -15,6 +15,7 @@ add_library(forge_engine STATIC
     src/renderer/VulkanContext.cpp
     src/renderer/VulkanDevice.cpp
     src/renderer/VulkanSwapchain.cpp
+    src/renderer/VulkanBuffer.cpp
     src/renderer/Renderer.cpp
 )
 add_library(forge::engine ALIAS forge_engine)  # consumers use the namespaced name
@@ -44,10 +45,10 @@ target_link_libraries(forge_engine
 find_program(FORGE_GLSLC glslc HINTS $ENV{VULKAN_SDK}/Bin $ENV{VULKAN_SDK}/bin)
 if(FORGE_GLSLC)
     add_custom_target(forge_shaders
-        COMMAND ${FORGE_GLSLC} -O ${CMAKE_CURRENT_SOURCE_DIR}/shaders/triangle.vert
-                -o ${CMAKE_CURRENT_SOURCE_DIR}/shaders/triangle.vert.spv
-        COMMAND ${FORGE_GLSLC} -O ${CMAKE_CURRENT_SOURCE_DIR}/shaders/triangle.frag
-                -o ${CMAKE_CURRENT_SOURCE_DIR}/shaders/triangle.frag.spv
+        COMMAND ${FORGE_GLSLC} -O ${CMAKE_CURRENT_SOURCE_DIR}/shaders/mesh.vert
+                -o ${CMAKE_CURRENT_SOURCE_DIR}/shaders/mesh.vert.spv
+        COMMAND ${FORGE_GLSLC} -O ${CMAKE_CURRENT_SOURCE_DIR}/shaders/mesh.frag
+                -o ${CMAKE_CURRENT_SOURCE_DIR}/shaders/mesh.frag.spv
         COMMENT "Recompiling GLSL -> SPIR-V into the source tree (commit the result)"
     )
 endif()
