@@ -14,7 +14,9 @@
 #include <Jolt/Physics/Body/BodyCreationSettings.h>
 #include <Jolt/Physics/Body/BodyInterface.h>
 #include <Jolt/Physics/Character/CharacterVirtual.h>
+#include <Jolt/Physics/Collision/BroadPhase/BroadPhaseQuery.h>
 #include <Jolt/Physics/Collision/CastResult.h>
+#include <Jolt/Physics/Collision/CollisionCollectorImpl.h>
 #include <Jolt/Physics/Collision/RayCast.h>
 #include <Jolt/Physics/Collision/Shape/BoxShape.h>
 #include <Jolt/Physics/Collision/Shape/CapsuleShape.h>
@@ -240,6 +242,24 @@ void PhysicsWorld::moveCharacter(const glm::vec3& horizontalVelocity, bool jump,
 glm::vec3 PhysicsWorld::characterPosition() const {
     const JPH::RVec3 p = m_impl->character->GetPosition();
     return {p.GetX(), p.GetY(), p.GetZ()};
+}
+
+std::vector<BodyId> PhysicsWorld::overlapBox(const glm::vec3& center,
+                                             const glm::vec3& halfExtents) const {
+    const JPH::AABox box(
+        JPH::Vec3(center.x - halfExtents.x, center.y - halfExtents.y, center.z - halfExtents.z),
+        JPH::Vec3(center.x + halfExtents.x, center.y + halfExtents.y, center.z + halfExtents.z));
+    JPH::AllHitCollisionCollector<JPH::CollideShapeBodyCollector> collector;
+    // MOVING broadphase layer == dynamic bodies only (the plate never
+    // wants to count itself or the walls).
+    m_impl->system->GetBroadPhaseQuery().CollideAABox(
+        box, collector, JPH::SpecifiedBroadPhaseLayerFilter(JPH::BroadPhaseLayer(1)));
+    std::vector<BodyId> out;
+    out.reserve(collector.mHits.size());
+    for (const JPH::BodyID& id : collector.mHits) {
+        out.push_back({id.GetIndexAndSequenceNumber()});
+    }
+    return out;
 }
 
 bool PhysicsWorld::characterGrounded() const {

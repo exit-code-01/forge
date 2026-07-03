@@ -286,8 +286,17 @@ int main() {
         const auto checker = forge::Renderer::defaultTexture();
         spawnEntity("Floor", {0.0f, -0.2f, 0.0f}, {14.0f, 0.4f, 14.0f}, cubeMesh, checker,
                     {7.0f, 0.2f, 7.0f}, false);
-        spawnEntity("Wall N", {0.0f, 1.6f, -7.2f}, {14.8f, 3.6f, 0.4f}, cubeMesh, checker,
-                    {7.4f, 1.8f, 0.2f}, false);
+        // North wall has the DOORWAY: two segments + a sliding Exit Door.
+        spawnEntity("Wall NW", {-4.25f, 1.6f, -7.2f}, {6.3f, 3.6f, 0.4f}, cubeMesh, checker,
+                    {3.15f, 1.8f, 0.2f}, false);
+        spawnEntity("Wall NE", {4.25f, 1.6f, -7.2f}, {6.3f, 3.6f, 0.4f}, cubeMesh, checker,
+                    {3.15f, 1.8f, 0.2f}, false);
+        spawnEntity("Wall N Top", {0.0f, 3.0f, -7.2f}, {2.2f, 0.8f, 0.4f}, cubeMesh, checker,
+                    {1.1f, 0.4f, 0.2f}, false);
+        spawnEntity("Exit Door", {0.0f, 1.25f, -7.2f}, {2.2f, 2.5f, 0.4f}, cubeMesh, crateTexture,
+                    {1.1f, 1.25f, 0.2f}, false);
+        spawnEntity("Exit Pad", {0.0f, -0.2f, -8.6f}, {3.0f, 0.4f, 2.6f}, cubeMesh, checker,
+                    {1.5f, 0.2f, 1.3f}, false);
         spawnEntity("Wall S", {0.0f, 1.6f, 7.2f}, {14.8f, 3.6f, 0.4f}, cubeMesh, checker,
                     {7.4f, 1.8f, 0.2f}, false);
         spawnEntity("Wall E", {7.2f, 1.6f, 0.0f}, {0.4f, 3.6f, 14.8f}, cubeMesh, checker,
@@ -356,7 +365,7 @@ int main() {
             scene.emplace<MeshRendererC>(e, MeshRendererC{cubeMesh, crateTexture});
             scene.emplace<BodyC>(e, BodyC{body, true});
         };
-        script.runFile("assets/scripts/scene.lua");
+        // (scene.lua is loaded below, after ALL bindings are installed.)
 
         // Gravity-glove pickup needs "which ENTITY is this body?".
         std::unordered_map<uint32_t, forge::ecs::Entity> bodyToEntity;
@@ -374,6 +383,36 @@ int main() {
                 }
             });
         };
+
+        // Week 2 scene hooks: Lua addresses entities by NAME (door logic
+        // lives in scene.lua); the host resolves names and keeps colliders
+        // synced. Linear lookup is fine at this entity count.
+        const auto findByName = [&](const std::string& name) {
+            forge::ecs::Entity found = forge::ecs::kNullEntity;
+            scene.each<Name>([&](forge::ecs::Entity e, Name& n) {
+                if (n.value == name) {
+                    found = e;
+                }
+            });
+            return found;
+        };
+        script.onSetEntityPosition = [&](const std::string& name, glm::vec3 p) {
+            const auto e = findByName(name);
+            if (!scene.alive(e)) {
+                return;
+            }
+            scene.get<TransformC>(e).position = p;
+            if (auto* b = scene.tryGet<BodyC>(e)) {
+                physics.teleport(b->id, p);
+            }
+        };
+        script.onGetEntityPosition = [&](const std::string& name) {
+            const auto e = findByName(name);
+            return scene.alive(e) ? scene.get<TransformC>(e).position : glm::vec3(0.0f);
+        };
+        script.onPlayerPosition = [&]() { return physics.characterPosition(); };
+        script.bindScene();
+        script.runFile("assets/scripts/scene.lua");
 
         // Editor state: selection, simulation control, orbit camera.
         forge::ecs::Entity selected = forge::ecs::kNullEntity;

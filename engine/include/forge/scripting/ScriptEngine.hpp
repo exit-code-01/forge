@@ -60,6 +60,14 @@ public:
     // drawing. Kept as a hook because rendering is the HOST's business.
     std::function<void(BodyId body, glm::vec3 halfExtents)> onBoxSpawned;
 
+    // Week 2 scene hooks: scripts address entities BY NAME; the host owns
+    // what a name means (ECS lookup + collider sync). Set before bindScene().
+    std::function<void(const std::string& name, glm::vec3 position)> onSetEntityPosition;
+    std::function<glm::vec3(const std::string& name)> onGetEntityPosition;
+    std::function<glm::vec3()> onPlayerPosition;
+    // forge.scene.setPosition/getPosition(name), forge.player.position().
+    void bindScene();
+
     // Protected load/run. Returns false (and logs) on failure; previously
     // loaded functions remain live. Calls onStart() if the script defines it.
     bool runFile(const std::string& path);

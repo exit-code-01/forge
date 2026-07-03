@@ -22,6 +22,7 @@
 #include <cstdint>
 #include <memory>
 #include <optional>
+#include <vector>
 
 namespace forge {
 
@@ -85,6 +86,12 @@ public:
     void moveCharacter(const glm::vec3& horizontalVelocity, bool jump, float dtSeconds);
     [[nodiscard]] glm::vec3 characterPosition() const; // capsule center
     [[nodiscard]] bool characterGrounded() const;
+
+    // Week 2: DYNAMIC bodies whose bounds overlap an axis-aligned box.
+    // The pressure-plate primitive: cheap broadphase query, main thread,
+    // no contact-listener threading — polled from Lua each frame.
+    [[nodiscard]] std::vector<BodyId> overlapBox(const glm::vec3& center,
+                                                 const glm::vec3& halfExtents) const;
 
 private:
     struct Impl;

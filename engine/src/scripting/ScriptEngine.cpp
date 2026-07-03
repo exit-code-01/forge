@@ -85,6 +85,10 @@ void ScriptEngine::bindPhysics(PhysicsWorld& physics) {
         const glm::mat4 transform = physics.bodyTransform(BodyId{body});
         return glm::vec3(transform[3]);
     });
+    // The pressure-plate primitive: count of dynamic bodies in a region.
+    phys.set_function("overlap", [&physics](const glm::vec3& center, const glm::vec3& half) {
+        return static_cast<int>(physics.overlapBox(center, half).size());
+    });
 }
 
 void ScriptEngine::bindInput(const Input& input) {
@@ -100,6 +104,22 @@ void ScriptEngine::bindInput(const Input& input) {
         }
         return input.wasKeyPressed(*key);
     });
+}
+
+void ScriptEngine::bindScene() {
+    sol::table forge = m_impl->lua["forge"];
+    sol::table sceneTable = forge.create_named("scene");
+    sceneTable.set_function("setPosition", [this](const std::string& name, const glm::vec3& p) {
+        if (onSetEntityPosition) {
+            onSetEntityPosition(name, p);
+        }
+    });
+    sceneTable.set_function("getPosition", [this](const std::string& name) {
+        return onGetEntityPosition ? onGetEntityPosition(name) : glm::vec3(0.0f);
+    });
+    sol::table playerTable = forge.create_named("player");
+    playerTable.set_function(
+        "position", [this]() { return onPlayerPosition ? onPlayerPosition() : glm::vec3(0.0f); });
 }
 
 void ScriptEngine::bindAudio(Audio& audio) {
