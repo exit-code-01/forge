@@ -314,3 +314,30 @@ Structure is ONE scene script with onStart/onUpdate hooks; per-entity script
 components arrive with the editor (P7) when VAULT's rooms need them.
 Rendering of script-spawned bodies stays the HOST's business via a single
 onBoxSpawned hook — the engine does not decide what things look like.
+
+## ADR-019 — Editor: embedded EditorUi over an internal hook; the scene IS the ECS
+
+Dear ImGui v1.92.8 + ImGuizmo (master-SHA pinned; no usable release tag since
+2021, and its upstream CMake project is deliberately skipped — it builds a
+widget zoo without even wiring imgui includes). Architecture in three
+decisions. (1) `forge::EditorUi` owns ImGui's lifecycle and GLFW/Vulkan
+backends and draws INSIDE `Renderer::drawFrame` through a narrow
+engine-internal hook (`src/renderer/RendererInternal.hpp`) — no Vulkan type
+enters public headers, and the include-path rule (ADR-002) physically stops
+apps from reaching the seam. The widget API itself is deliberately NOT
+wrapped: apps include <imgui.h> and build their own panels, because a
+wrapped ImGui is a worse ImGui. (2) The editor edits the ECS: entities carry
+Name/Transform/MeshRenderer/Body components, the frame's DrawItems are built
+by iterating the registry, and script-spawned bodies become entities — one
+scene model serves gameplay, rendering, and tooling. Physics stays
+authoritative for dynamic transforms; editor edits go through
+`PhysicsWorld::teleport` so colliders never desync from meshes. (3) The
+editor ships EMBEDDED in the app rather than as the separate `editor/`
+executable ADR-001 sketched — a standalone editor earns its keep when scenes
+serialize (P10-era); until then two copies of scene setup would be pure
+drift risk. Convention traps recorded for posterity: ImGuizmo performs its
+own Y-flip (expects GL-style NDC) so it receives the UNFLIPPED projection,
+and imgui.h must precede ImGuizmo.h — an include-sorting formatter will
+happily break that, hence the block separation. UI drawn under 125% DPI also
+exposed that our capture tooling was silently cropping: fixed by making it
+DPI-aware, closing the loop on the P3.1 "off-center cube" illusion for good.

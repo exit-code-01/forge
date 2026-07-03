@@ -40,23 +40,22 @@ sudo apt install xorg-dev libwayland-dev libxkbcommon-dev wayland-protocols
 - **P4** Physics: Jolt integration, collision, rigidbodies — ✅ done
 - **P5** Asset pipeline: model/texture import, hot reload — ✅ done
 - **P6** Scripting: Lua bindings — ✅ done
-- **P7** Editor: scene hierarchy, inspector, gizmos (Dear ImGui)
+- **P7** Editor: scene hierarchy, inspector, gizmos (Dear ImGui) — ✅ done
 - **P8** Animation (skeletal), particles, audio
 - **P9** Networking basics (optional)
 - **P10** Polish, docs, sample game, public release
 
 ## Status
 
-P6 complete — gameplay logic lives in Lua. `forge::ScriptEngine` (Lua 5.4.8
-via sol2) runs `assets/scripts/scene.lua` with onStart/onUpdate hooks and
-bindings shaped by the sample game's needs: spawn boxes, kick bodies, read
-positions, read input. Scripts hot-reload through the same watcher as
-textures and meshes — and a broken script never crashes the engine; the
-last good version keeps running while the error is on screen. The SPACE
-kick migrated from C++ to one line of Lua, and E rains crate boxes into
-the physics scene. Zero validation complaints. Next: P7 — the Dear ImGui
-editor (scene hierarchy, inspector, gizmos), where the engine starts
-building VAULT's rooms.
+P7 complete — the engine has a face. Dear ImGui draws inside the Vulkan
+frame via `forge::EditorUi`; the scene is now real ECS entities
+(Name/Transform/MeshRenderer/Body), browsable in a hierarchy panel and
+editable in an inspector — positions drag-edit with colliders teleporting
+in sync, simulation pauses and single-steps, the camera orbits (RMB) and
+zooms (wheel), and selected entities get an ImGuizmo world-space translate
+gizmo. Script-spawned boxes appear in the hierarchy live. Zero validation
+complaints. Next: P8 — skeletal animation, particles, audio; then VAULT's
+rooms get built in this editor.
 
 ## Vulkan SDK
 
