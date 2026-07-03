@@ -104,4 +104,11 @@ std::vector<const char*> Window::requiredVulkanExtensions() const {
 
 void Window::requestClose() { glfwSetWindowShouldClose(m_handle, GLFW_TRUE); }
 
+void Window::setCursorCaptured(bool captured) {
+    glfwSetInputMode(m_handle, GLFW_CURSOR, captured ? GLFW_CURSOR_DISABLED : GLFW_CURSOR_NORMAL);
+    if (captured && glfwRawMouseMotionSupported() == GLFW_TRUE) {
+        glfwSetInputMode(m_handle, GLFW_RAW_MOUSE_MOTION, GLFW_TRUE); // no OS acceleration
+    }
+}
+
 } // namespace forge

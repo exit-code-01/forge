@@ -13,7 +13,11 @@
 #include <Jolt/Core/TempAllocator.h>
 #include <Jolt/Physics/Body/BodyCreationSettings.h>
 #include <Jolt/Physics/Body/BodyInterface.h>
+#include <Jolt/Physics/Character/CharacterVirtual.h>
+#include <Jolt/Physics/Collision/CastResult.h>
+#include <Jolt/Physics/Collision/RayCast.h>
 #include <Jolt/Physics/Collision/Shape/BoxShape.h>
+#include <Jolt/Physics/Collision/Shape/CapsuleShape.h>
 #include <Jolt/Physics/PhysicsSettings.h>
 #include <Jolt/Physics/PhysicsSystem.h>
 #include <Jolt/RegisterTypes.h>
@@ -85,6 +89,10 @@ struct PhysicsWorld::Impl {
     std::unique_ptr<JPH::JobSystemThreadPool> jobSystem;
     std::unique_ptr<JPH::PhysicsSystem> system;
     float accumulator = 0.0f;
+
+    // VAULT week 1: the one player character (see header rationale).
+    JPH::Ref<JPH::CharacterVirtual> character;
+    float characterVerticalVelocity = 0.0f;
 };
 
 PhysicsWorld::PhysicsWorld() : m_impl(std::make_unique<Impl>()) {
@@ -177,6 +185,65 @@ void PhysicsWorld::teleport(BodyId id, const glm::vec3& position) {
     if (bodies.GetMotionType(body) == JPH::EMotionType::Dynamic) {
         bodies.SetLinearAndAngularVelocity(body, JPH::Vec3::sZero(), JPH::Vec3::sZero());
     }
+}
+
+void PhysicsWorld::setLinearVelocity(BodyId id, const glm::vec3& velocity) {
+    m_impl->system->GetBodyInterface().SetLinearVelocity(
+        JPH::BodyID(id.value), JPH::Vec3(velocity.x, velocity.y, velocity.z));
+}
+
+std::optional<BodyId> PhysicsWorld::raycast(const glm::vec3& origin, const glm::vec3& direction,
+                                            float maxDistance) const {
+    const JPH::RRayCast ray{JPH::RVec3(origin.x, origin.y, origin.z),
+                            JPH::Vec3(direction.x, direction.y, direction.z) * maxDistance};
+    JPH::RayCastResult hit;
+    if (m_impl->system->GetNarrowPhaseQuery().CastRay(ray, hit)) {
+        return BodyId{hit.mBodyID.GetIndexAndSequenceNumber()};
+    }
+    return std::nullopt;
+}
+
+void PhysicsWorld::createCharacter(const glm::vec3& position, float radius,
+                                   float cylinderHalfHeight) {
+    JPH::Ref<JPH::CharacterVirtualSettings> settings = new JPH::CharacterVirtualSettings();
+    settings->mShape = new JPH::CapsuleShape(cylinderHalfHeight, radius);
+    settings->mMaxSlopeAngle = JPH::DegreesToRadians(50.0f);
+    m_impl->character =
+        new JPH::CharacterVirtual(settings, JPH::RVec3(position.x, position.y, position.z),
+                                  JPH::Quat::sIdentity(), 0, m_impl->system.get());
+    FORGE_INFO("physics: character controller up (r {:.2f}, height {:.2f})", radius,
+               2.0f * (cylinderHalfHeight + radius));
+}
+
+void PhysicsWorld::moveCharacter(const glm::vec3& horizontalVelocity, bool jump, float dtSeconds) {
+    JPH::CharacterVirtual& character = *m_impl->character;
+    const bool grounded =
+        character.GetGroundState() == JPH::CharacterVirtual::EGroundState::OnGround;
+    if (grounded) {
+        m_impl->characterVerticalVelocity = jump ? 5.5f : 0.0f;
+    } else {
+        m_impl->characterVerticalVelocity -= 9.81f * dtSeconds;
+    }
+    character.SetLinearVelocity(
+        JPH::Vec3(horizontalVelocity.x, m_impl->characterVerticalVelocity, horizontalVelocity.z));
+
+    // ExtendedUpdate = move + slide + stick-to-floor + walk-stairs, the
+    // whole character-controller kitchen in one Jolt call.
+    JPH::CharacterVirtual::ExtendedUpdateSettings updateSettings;
+    updateSettings.mWalkStairsStepUp = JPH::Vec3(0.0f, 0.35f, 0.0f);
+    character.ExtendedUpdate(dtSeconds, m_impl->system->GetGravity(), updateSettings,
+                             m_impl->system->GetDefaultBroadPhaseLayerFilter(layers::kMoving),
+                             m_impl->system->GetDefaultLayerFilter(layers::kMoving),
+                             JPH::BodyFilter{}, JPH::ShapeFilter{}, *m_impl->tempAllocator);
+}
+
+glm::vec3 PhysicsWorld::characterPosition() const {
+    const JPH::RVec3 p = m_impl->character->GetPosition();
+    return {p.GetX(), p.GetY(), p.GetZ()};
+}
+
+bool PhysicsWorld::characterGrounded() const {
+    return m_impl->character->GetGroundState() == JPH::CharacterVirtual::EGroundState::OnGround;
 }
 
 } // namespace forge

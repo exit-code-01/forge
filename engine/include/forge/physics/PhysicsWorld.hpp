@@ -21,6 +21,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <optional>
 
 namespace forge {
 
@@ -66,6 +67,24 @@ public:
     // object should not remember it was falling). Rotation is preserved.
     // Works on static bodies too (colliders follow editor placement).
     void teleport(BodyId id, const glm::vec3& position);
+
+    // ---- VAULT week 1 additions (flagged ENGINE GAPs, kept minimal) ----
+
+    // Gravity-glove support: hard-set velocity (mass-independent spring
+    // carry, throws) and "what is the crosshair pointing at".
+    void setLinearVelocity(BodyId id, const glm::vec3& velocity);
+    [[nodiscard]] std::optional<BodyId> raycast(const glm::vec3& origin, const glm::vec3& direction,
+                                                float maxDistance) const;
+
+    // THE character controller (Jolt CharacterVirtual): capsule centered at
+    // `position`, total height = 2*(cylinderHalfHeight + radius). Exactly
+    // one — VAULT has one player; a roster is a later design conversation.
+    void createCharacter(const glm::vec3& position, float radius, float cylinderHalfHeight);
+    // Per frame: horizontal velocity (y ignored; gravity/jump handled
+    // internally), jump edge, real frame dt. Walks steps up to ~0.35 m.
+    void moveCharacter(const glm::vec3& horizontalVelocity, bool jump, float dtSeconds);
+    [[nodiscard]] glm::vec3 characterPosition() const; // capsule center
+    [[nodiscard]] bool characterGrounded() const;
 
 private:
     struct Impl;

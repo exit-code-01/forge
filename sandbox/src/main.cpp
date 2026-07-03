@@ -34,6 +34,7 @@
 #include <filesystem>
 #include <memory>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace {
@@ -281,29 +282,62 @@ int main() {
             return e;
         };
 
+        // ---- VAULT week 1: the grey-box tutorial room. Floor top at y=0.
         const auto checker = forge::Renderer::defaultTexture();
-        spawnEntity("Ground", {0.0f, -0.85f, 0.0f}, {8.0f, 0.2f, 8.0f}, cubeMesh, checker,
-                    {4.0f, 0.1f, 4.0f}, false);
-        spawnEntity("Torus", {-1.6f, -0.5f, 0.3f}, {1.0f, 1.0f, 1.0f}, torusMesh, crateTexture,
+        spawnEntity("Floor", {0.0f, -0.2f, 0.0f}, {14.0f, 0.4f, 14.0f}, cubeMesh, checker,
+                    {7.0f, 0.2f, 7.0f}, false);
+        spawnEntity("Wall N", {0.0f, 1.6f, -7.2f}, {14.8f, 3.6f, 0.4f}, cubeMesh, checker,
+                    {7.4f, 1.8f, 0.2f}, false);
+        spawnEntity("Wall S", {0.0f, 1.6f, 7.2f}, {14.8f, 3.6f, 0.4f}, cubeMesh, checker,
+                    {7.4f, 1.8f, 0.2f}, false);
+        spawnEntity("Wall E", {7.2f, 1.6f, 0.0f}, {0.4f, 3.6f, 14.8f}, cubeMesh, checker,
+                    {0.2f, 1.8f, 7.4f}, false);
+        spawnEntity("Wall W", {-7.2f, 1.6f, 0.0f}, {0.4f, 3.6f, 14.8f}, cubeMesh, checker,
+                    {0.2f, 1.8f, 7.4f}, false);
+        // Step (walkable, tests step-offset) and ledge (needs the elevator).
+        spawnEntity("Step", {3.0f, 0.15f, 2.0f}, {2.4f, 0.3f, 2.4f}, cubeMesh, checker,
+                    {1.2f, 0.15f, 1.2f}, false);
+        spawnEntity("Ledge", {5.5f, 1.1f, -5.5f}, {3.0f, 2.2f, 3.0f}, cubeMesh, checker,
+                    {1.5f, 1.1f, 1.5f}, false);
+        // Throwables — Crate A sits dead ahead of the spawn look direction.
+        spawnEntity("Crate A", {0.0f, 0.4f, 2.5f}, {0.5f, 0.5f, 0.5f}, cubeMesh, crateTexture,
+                    {0.25f, 0.25f, 0.25f}, true, 0.3f);
+        spawnEntity("Crate B", {-1.2f, 0.4f, 1.2f}, {0.5f, 0.5f, 0.5f}, cubeMesh, crateTexture,
+                    {0.25f, 0.25f, 0.25f}, true, 0.3f);
+        spawnEntity("Crate C", {1.3f, 0.4f, 0.8f}, {0.5f, 0.5f, 0.5f}, cubeMesh, crateTexture,
+                    {0.25f, 0.25f, 0.25f}, true, 0.3f);
+        // Week-2 vocabulary placeholder (no logic yet) + the import mascot.
+        spawnEntity("Plate (week 2)", {-3.0f, 0.05f, 2.0f}, {1.4f, 0.1f, 1.4f}, cubeMesh,
+                    crateTexture, {0.7f, 0.05f, 0.7f}, false);
+        spawnEntity("Torus", {-3.5f, 0.27f, -3.5f}, {1.0f, 1.0f, 1.0f}, torusMesh, crateTexture,
                     {0.85f, 0.25f, 0.85f}, false);
-        const auto cubeEntity = spawnEntity("Cube", {0.0f, 3.0f, 0.0f}, {1.0f, 1.0f, 1.0f},
-                                            cubeMesh, checker, {0.5f, 0.5f, 0.5f}, true, 0.4f);
 
-        // P8 (lean): audio + scripted spark bursts + a keyframe-animated
-        // platform. Skinned meshes are deferred by decision (ADR-020).
         forge::Audio audio;
         forge::fx::ParticleEmitter sparks;
 
+        // The elevator: keyframe-animated platform (P8) rides up to the ledge.
         const auto platformEntity =
-            spawnEntity("Platform", {2.2f, -0.4f, -1.5f}, {1.6f, 0.2f, 1.6f}, cubeMesh,
-                        crateTexture, {0.8f, 0.1f, 0.8f}, false);
+            spawnEntity("Elevator", {3.2f, 0.15f, -5.5f}, {1.8f, 0.3f, 1.8f}, cubeMesh,
+                        crateTexture, {0.9f, 0.15f, 0.9f}, false);
         forge::anim::Clip platformClip;
         platformClip.positionKeys = {
-            {0.0f, {2.2f, -0.4f, -1.5f}},
-            {2.5f, {2.2f, 1.6f, -1.5f}},
-            {5.0f, {2.2f, -0.4f, -1.5f}},
+            {0.0f, {3.2f, 0.15f, -5.5f}},
+            {3.0f, {3.2f, 2.05f, -5.5f}},
+            {4.5f, {3.2f, 2.05f, -5.5f}}, // dwell at the top
+            {7.5f, {3.2f, 0.15f, -5.5f}},
         };
         float animTime = 0.0f;
+
+        // ---- The player: capsule controller + first-person camera.
+        physics.createCharacter({0.0f, 1.0f, 5.0f}, 0.35f, 0.55f);
+        struct Player {
+            float yaw = 0.0f; // 0 faces -Z (toward the room)
+            float pitch = 0.0f;
+            forge::BodyId held{};
+            bool holding = false;
+        } player;
+        bool playMode = true; // TAB toggles into the editor
+        window.setCursorCaptured(true);
 
         // Scripting: gameplay decisions move to Lua (ADR-018). Script-spawned
         // bodies become full scene entities — they show up in the hierarchy.
@@ -320,8 +354,24 @@ int main() {
             scene.emplace<MeshRendererC>(e, MeshRendererC{cubeMesh, crateTexture});
             scene.emplace<BodyC>(e, BodyC{body, true});
         };
-        script.setGlobal("cube", scene.get<BodyC>(cubeEntity).id.value);
         script.runFile("assets/scripts/scene.lua");
+
+        // Gravity-glove pickup needs "which ENTITY is this body?".
+        std::unordered_map<uint32_t, forge::ecs::Entity> bodyToEntity;
+        scene.each<Name>([&](forge::ecs::Entity e, Name&) {
+            if (auto* b = scene.tryGet<BodyC>(e)) {
+                bodyToEntity[b->id.value] = e;
+            }
+        });
+        const auto onSpawnedOld = script.onBoxSpawned;
+        script.onBoxSpawned = [&, onSpawnedOld](forge::BodyId body, glm::vec3 he) {
+            onSpawnedOld(body, he);
+            scene.each<Name>([&](forge::ecs::Entity e, Name&) {
+                if (auto* b = scene.tryGet<BodyC>(e); b != nullptr && b->id.value == body.value) {
+                    bodyToEntity[body.value] = e;
+                }
+            });
+        };
 
         // Editor state: selection, simulation control, orbit camera.
         forge::ecs::Entity selected = forge::ecs::kNullEntity;
@@ -346,125 +396,227 @@ int main() {
             if (input.wasKeyPressed(forge::Key::Escape)) {
                 window.requestClose();
             }
-            // The SPACE kick lives in scene.lua now — see onUpdate there.
+            if (input.wasKeyPressed(forge::Key::Tab)) {
+                playMode = !playMode;
+                window.setCursorCaptured(playMode);
+                player.holding = false; // no stale grabs across mode switches
+            }
 
             const auto now = std::chrono::steady_clock::now();
             const float dt = std::chrono::duration<float>(now - lastTime).count();
             lastTime = now;
 
-            // Orbit camera — only when the UI isn't using the mouse. Uses
-            // LAST frame's capture state before beginFrame; imperceptible.
-            if (!(ui && ui->wantCaptureMouse())) {
-                if (input.isMouseDown(forge::MouseButton::Right)) {
-                    camYaw += static_cast<float>(input.mouseDeltaX()) * 0.4f;
-                    camPitch = std::clamp(camPitch + static_cast<float>(input.mouseDeltaY()) * 0.4f,
-                                          -85.0f, 85.0f);
+            forge::Camera camera{};
+            if (playMode) {
+                // ---- First-person: mouse-look + WASD through the capsule.
+                player.yaw += static_cast<float>(input.mouseDeltaX()) * 0.14f;
+                player.pitch = std::clamp(
+                    player.pitch - static_cast<float>(input.mouseDeltaY()) * 0.14f, -89.0f, 89.0f);
+                const float py = glm::radians(player.yaw);
+                const float pp = glm::radians(player.pitch);
+                const glm::vec3 look{std::cos(pp) * std::sin(py), std::sin(pp),
+                                     -std::cos(pp) * std::cos(py)};
+                const glm::vec3 forward{std::sin(py), 0.0f, -std::cos(py)};
+                const glm::vec3 right{std::cos(py), 0.0f, std::sin(py)};
+
+                glm::vec3 move{0.0f};
+                if (input.isKeyDown(forge::Key::W)) {
+                    move += forward;
                 }
-                camDist =
-                    std::clamp(camDist * std::pow(0.92f, static_cast<float>(input.scrollDeltaY())),
-                               2.0f, 30.0f);
+                if (input.isKeyDown(forge::Key::S)) {
+                    move -= forward;
+                }
+                if (input.isKeyDown(forge::Key::D)) {
+                    move += right;
+                }
+                if (input.isKeyDown(forge::Key::A)) {
+                    move -= right;
+                }
+                if (move != glm::vec3(0.0f)) {
+                    move = glm::normalize(move);
+                }
+                const float speed = input.isKeyDown(forge::Key::LeftShift) ? 7.0f : 4.5f;
+                physics.moveCharacter(move * speed,
+                                      !paused && input.wasKeyPressed(forge::Key::Space),
+                                      paused ? 0.0f : dt);
+
+                const glm::vec3 eye = physics.characterPosition() + glm::vec3(0.0f, 0.65f, 0.0f);
+                camera.position = eye;
+                camera.target = eye + look;
+
+                // ---- Gravity glove: grab / carry / throw / drop.
+                if (input.wasMousePressed(forge::MouseButton::Left)) {
+                    if (player.holding) { // throw
+                        physics.setLinearVelocity(player.held, look * 11.0f);
+                        player.holding = false;
+                        audio.play("assets/sounds/kick.wav");
+                        sparks.burst(eye + look * 1.2f, 12);
+                    } else if (const auto hit = physics.raycast(eye, look, 3.5f)) {
+                        const auto it = bodyToEntity.find(hit->value);
+                        auto* bc =
+                            it != bodyToEntity.end() ? scene.tryGet<BodyC>(it->second) : nullptr;
+                        if (bc != nullptr && bc->dynamic) {
+                            player.held = *hit;
+                            player.holding = true;
+                            FORGE_INFO("glove: grabbed {}", scene.get<Name>(it->second).value);
+                        } else {
+                            FORGE_INFO("glove: hit body {} (not grabbable)", hit->value);
+                        }
+                    } else {
+                        FORGE_INFO(
+                            "glove: miss (eye {:.1f},{:.1f},{:.1f} look {:.2f},{:.2f},{:.2f})",
+                            eye.x, eye.y, eye.z, look.x, look.y, look.z);
+                    }
+                }
+                if (player.holding && input.wasMousePressed(forge::MouseButton::Right)) {
+                    physics.setLinearVelocity(player.held, {0.0f, 0.0f, 0.0f}); // gentle drop
+                    player.holding = false;
+                }
+                if (player.holding) {
+                    // Velocity spring: mass-independent, fights gravity for
+                    // free, and held objects PUSH against obstacles instead
+                    // of teleporting through them — that is the whole trick.
+                    const glm::vec3 target = eye + look * 1.9f;
+                    const glm::vec3 at = glm::vec3(physics.bodyTransform(player.held)[3]);
+                    glm::vec3 springVel = (target - at) * 12.0f;
+                    const float springLen = glm::length(springVel);
+                    if (springLen > 14.0f) {
+                        springVel *= 14.0f / springLen;
+                    }
+                    physics.setLinearVelocity(player.held, springVel);
+                }
+            } else {
+                // ---- Editor orbit camera (unchanged from P7).
+                if (!(ui && ui->wantCaptureMouse())) {
+                    if (input.isMouseDown(forge::MouseButton::Right)) {
+                        camYaw += static_cast<float>(input.mouseDeltaX()) * 0.4f;
+                        camPitch =
+                            std::clamp(camPitch + static_cast<float>(input.mouseDeltaY()) * 0.4f,
+                                       -85.0f, 85.0f);
+                    }
+                    camDist = std::clamp(
+                        camDist * std::pow(0.92f, static_cast<float>(input.scrollDeltaY())), 2.0f,
+                        30.0f);
+                }
+                const float yawR = glm::radians(camYaw);
+                const float pitchR = glm::radians(camPitch);
+                camera.position =
+                    camTarget + camDist * glm::vec3(std::sin(yawR) * std::cos(pitchR),
+                                                    std::sin(pitchR),
+                                                    std::cos(yawR) * std::cos(pitchR));
+                camera.target = camTarget;
             }
-            const float yawR = glm::radians(camYaw);
-            const float pitchR = glm::radians(camPitch);
-            const forge::Camera camera{
-                .position = camTarget + camDist * glm::vec3(std::sin(yawR) * std::cos(pitchR),
-                                                            std::sin(pitchR),
-                                                            std::cos(yawR) * std::cos(pitchR)),
-                .target = camTarget};
 
             if (ui) {
                 ui->beginFrame();
                 ImGuizmo::BeginFrame();
 
-                // ---- Scene panel: simulation control + hierarchy.
-                ImGui::SetNextWindowPos({12.0f, 12.0f}, ImGuiCond_FirstUseEver);
-                ImGui::SetNextWindowSize({250.0f, 400.0f}, ImGuiCond_FirstUseEver);
-                ImGui::Begin("Scene");
-                ImGui::Text("%.1f fps (%.2f ms)", 1.0 / static_cast<double>(dt),
-                            static_cast<double>(dt) * 1000.0);
-                ImGui::Checkbox("Pause", &paused);
-                ImGui::SameLine();
-                if (ImGui::Button("Step")) {
-                    stepOnce = true;
-                }
-                ImGui::Separator();
-                scene.each<Name>([&](forge::ecs::Entity e, Name& name) {
-                    ImGui::PushID(static_cast<int>(e.index));
-                    if (ImGui::Selectable(name.value.c_str(), selected == e)) {
-                        selected = e;
-                    }
-                    ImGui::PopID();
-                });
-                ImGui::Separator();
-                ImGui::TextDisabled("RMB drag: orbit / wheel: zoom");
-                ImGui::TextDisabled("E: box rain / SPACE: kick (Lua)");
-                ImGui::End();
-
-                // ---- Inspector panel: the selected entity's components.
-                ImGui::SetNextWindowPos({1280.0f - 292.0f, 12.0f}, ImGuiCond_FirstUseEver);
-                ImGui::SetNextWindowSize({280.0f, 300.0f}, ImGuiCond_FirstUseEver);
-                ImGui::Begin("Inspector");
-                if (!scene.alive(selected)) {
-                    ImGui::TextDisabled("select an entity in Scene");
-                } else {
-                    auto& name = scene.get<Name>(selected);
-                    char nameBuf[64]{};
-                    std::snprintf(nameBuf, sizeof(nameBuf), "%s", name.value.c_str());
-                    if (ImGui::InputText("name", nameBuf, sizeof(nameBuf))) {
-                        name.value = nameBuf;
-                    }
-                    auto& t = scene.get<TransformC>(selected);
-                    auto* body = scene.tryGet<BodyC>(selected);
-                    if (body != nullptr && body->dynamic) {
-                        // Physics owns this transform: edit = teleport.
-                        glm::vec3 p = glm::vec3(physics.bodyTransform(body->id)[3]);
-                        if (ImGui::DragFloat3("position", &p.x, 0.05f)) {
-                            physics.teleport(body->id, p);
-                        }
-                        ImGui::TextDisabled("rotation/scale: physics-driven");
-                        if (ImGui::Button("Kick")) {
-                            physics.addLinearVelocity(body->id, {0.6f, 6.0f, 0.4f});
-                        }
-                    } else {
-                        const bool moved = ImGui::DragFloat3("position", &t.position.x, 0.05f);
-                        ImGui::DragFloat3("rotation", &t.eulerDeg.x, 0.5f);
-                        ImGui::DragFloat3("scale", &t.scale.x, 0.02f);
-                        if (moved && body != nullptr) {
-                            physics.teleport(body->id, t.position); // collider follows
-                        }
-                    }
-                }
-                ImGui::End();
-
-                // ---- Translate gizmo on the selection (P7.3). ImGuizmo
-                // flips Y itself (expects GL-style NDC), so it gets the
-                // UNFLIPPED projection — hand it ours and everything drags
-                // upside-down. Same fov/near/far the renderer uses.
-                if (scene.alive(selected)) {
+                if (playMode) {
+                    // Minimal HUD: crosshair (filled while holding) + hints.
                     const ImGuiIO& io = ImGui::GetIO();
-                    ImGuizmo::SetOrthographic(false);
-                    ImGuizmo::SetRect(0.0f, 0.0f, io.DisplaySize.x, io.DisplaySize.y);
-                    const glm::mat4 view =
-                        glm::lookAt(camera.position, camera.target, glm::vec3(0, 1, 0));
-                    const glm::mat4 proj = glm::perspective(glm::radians(camera.fovYDegrees),
-                                                            io.DisplaySize.x / io.DisplaySize.y,
-                                                            camera.nearPlane, camera.farPlane);
+                    ImDrawList* draw = ImGui::GetForegroundDrawList();
+                    const ImVec2 center{io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f};
+                    if (player.holding) {
+                        draw->AddCircleFilled(center, 5.0f, IM_COL32(255, 220, 120, 230));
+                    } else {
+                        draw->AddCircle(center, 5.0f, IM_COL32(255, 255, 255, 200), 0, 1.5f);
+                    }
+                    draw->AddText({12.0f, io.DisplaySize.y - 26.0f}, IM_COL32(255, 255, 255, 160),
+                                  "WASD move  SPACE jump  LMB grab/throw  RMB drop  "
+                                  "E crates  TAB editor");
+                }
 
-                    auto& t = scene.get<TransformC>(selected);
-                    auto* body = scene.tryGet<BodyC>(selected);
-                    glm::mat4 model =
-                        (body != nullptr && body->dynamic)
-                            ? physics.bodyTransform(body->id) * glm::scale(glm::mat4(1.0f), t.scale)
-                            : trs(t);
-                    if (ImGuizmo::Manipulate(&view[0][0], &proj[0][0], ImGuizmo::TRANSLATE,
-                                             ImGuizmo::WORLD, &model[0][0])) {
-                        const glm::vec3 newPosition{model[3]};
-                        t.position = newPosition;
-                        if (body != nullptr) {
-                            physics.teleport(body->id, newPosition);
+                if (!playMode) {
+                    // ---- Scene panel: simulation control + hierarchy.
+                    ImGui::SetNextWindowPos({12.0f, 12.0f}, ImGuiCond_FirstUseEver);
+                    ImGui::SetNextWindowSize({250.0f, 400.0f}, ImGuiCond_FirstUseEver);
+                    ImGui::Begin("Scene");
+                    ImGui::Text("%.1f fps (%.2f ms)", 1.0 / static_cast<double>(dt),
+                                static_cast<double>(dt) * 1000.0);
+                    ImGui::Checkbox("Pause", &paused);
+                    ImGui::SameLine();
+                    if (ImGui::Button("Step")) {
+                        stepOnce = true;
+                    }
+                    ImGui::Separator();
+                    scene.each<Name>([&](forge::ecs::Entity e, Name& name) {
+                        ImGui::PushID(static_cast<int>(e.index));
+                        if (ImGui::Selectable(name.value.c_str(), selected == e)) {
+                            selected = e;
+                        }
+                        ImGui::PopID();
+                    });
+                    ImGui::Separator();
+                    ImGui::TextDisabled("RMB drag: orbit / wheel: zoom");
+                    ImGui::TextDisabled("E: box rain / SPACE: kick (Lua)");
+                    ImGui::End();
+
+                    // ---- Inspector panel: the selected entity's components.
+                    ImGui::SetNextWindowPos({1280.0f - 292.0f, 12.0f}, ImGuiCond_FirstUseEver);
+                    ImGui::SetNextWindowSize({280.0f, 300.0f}, ImGuiCond_FirstUseEver);
+                    ImGui::Begin("Inspector");
+                    if (!scene.alive(selected)) {
+                        ImGui::TextDisabled("select an entity in Scene");
+                    } else {
+                        auto& name = scene.get<Name>(selected);
+                        char nameBuf[64]{};
+                        std::snprintf(nameBuf, sizeof(nameBuf), "%s", name.value.c_str());
+                        if (ImGui::InputText("name", nameBuf, sizeof(nameBuf))) {
+                            name.value = nameBuf;
+                        }
+                        auto& t = scene.get<TransformC>(selected);
+                        auto* body = scene.tryGet<BodyC>(selected);
+                        if (body != nullptr && body->dynamic) {
+                            // Physics owns this transform: edit = teleport.
+                            glm::vec3 p = glm::vec3(physics.bodyTransform(body->id)[3]);
+                            if (ImGui::DragFloat3("position", &p.x, 0.05f)) {
+                                physics.teleport(body->id, p);
+                            }
+                            ImGui::TextDisabled("rotation/scale: physics-driven");
+                            if (ImGui::Button("Kick")) {
+                                physics.addLinearVelocity(body->id, {0.6f, 6.0f, 0.4f});
+                            }
+                        } else {
+                            const bool moved = ImGui::DragFloat3("position", &t.position.x, 0.05f);
+                            ImGui::DragFloat3("rotation", &t.eulerDeg.x, 0.5f);
+                            ImGui::DragFloat3("scale", &t.scale.x, 0.02f);
+                            if (moved && body != nullptr) {
+                                physics.teleport(body->id, t.position); // collider follows
+                            }
                         }
                     }
-                }
+                    ImGui::End();
+
+                    // ---- Translate gizmo on the selection (P7.3). ImGuizmo
+                    // flips Y itself (expects GL-style NDC), so it gets the
+                    // UNFLIPPED projection — hand it ours and everything drags
+                    // upside-down. Same fov/near/far the renderer uses.
+                    if (scene.alive(selected)) {
+                        const ImGuiIO& io = ImGui::GetIO();
+                        ImGuizmo::SetOrthographic(false);
+                        ImGuizmo::SetRect(0.0f, 0.0f, io.DisplaySize.x, io.DisplaySize.y);
+                        const glm::mat4 view =
+                            glm::lookAt(camera.position, camera.target, glm::vec3(0, 1, 0));
+                        const glm::mat4 proj = glm::perspective(glm::radians(camera.fovYDegrees),
+                                                                io.DisplaySize.x / io.DisplaySize.y,
+                                                                camera.nearPlane, camera.farPlane);
+
+                        auto& t = scene.get<TransformC>(selected);
+                        auto* body = scene.tryGet<BodyC>(selected);
+                        glm::mat4 model = (body != nullptr && body->dynamic)
+                                              ? physics.bodyTransform(body->id) *
+                                                    glm::scale(glm::mat4(1.0f), t.scale)
+                                              : trs(t);
+                        if (ImGuizmo::Manipulate(&view[0][0], &proj[0][0], ImGuizmo::TRANSLATE,
+                                                 ImGuizmo::WORLD, &model[0][0])) {
+                            const glm::vec3 newPosition{model[3]};
+                            t.position = newPosition;
+                            if (body != nullptr) {
+                                physics.teleport(body->id, newPosition);
+                            }
+                        }
+                    }
+                } // !playMode (editor panels + gizmo)
             }
 
             // Simulation control: pause freezes gameplay+physics; Step runs

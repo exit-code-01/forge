@@ -45,6 +45,10 @@ public:
     [[nodiscard]] bool shouldClose() const;
     void requestClose();
 
+    // First-person mode (VAULT): hide + lock the cursor so mouse deltas are
+    // unbounded look input. false restores the normal cursor.
+    void setCursorCaptured(bool captured);
+
     // Input state for this window, valid between pollEvents() calls.
     [[nodiscard]] Input& input() { return m_input; }
     [[nodiscard]] const Input& input() const { return m_input; }
