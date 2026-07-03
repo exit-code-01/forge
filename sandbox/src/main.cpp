@@ -16,6 +16,10 @@
 
 #include <imgui.h>
 
+// ImGuizmo requires imgui.h BEFORE it (it includes nothing itself) — the
+// blank line keeps clang-format from alphabetizing them into a broken order.
+#include <ImGuizmo.h>
+
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/vec3.hpp>
 
@@ -327,8 +331,29 @@ int main() {
             const float dt = std::chrono::duration<float>(now - lastTime).count();
             lastTime = now;
 
+            // Orbit camera — only when the UI isn't using the mouse. Uses
+            // LAST frame's capture state before beginFrame; imperceptible.
+            if (!(ui && ui->wantCaptureMouse())) {
+                if (input.isMouseDown(forge::MouseButton::Right)) {
+                    camYaw += static_cast<float>(input.mouseDeltaX()) * 0.4f;
+                    camPitch = std::clamp(camPitch + static_cast<float>(input.mouseDeltaY()) * 0.4f,
+                                          -85.0f, 85.0f);
+                }
+                camDist =
+                    std::clamp(camDist * std::pow(0.92f, static_cast<float>(input.scrollDeltaY())),
+                               2.0f, 30.0f);
+            }
+            const float yawR = glm::radians(camYaw);
+            const float pitchR = glm::radians(camPitch);
+            const forge::Camera camera{
+                .position = camTarget + camDist * glm::vec3(std::sin(yawR) * std::cos(pitchR),
+                                                            std::sin(pitchR),
+                                                            std::cos(yawR) * std::cos(pitchR)),
+                .target = camTarget};
+
             if (ui) {
                 ui->beginFrame();
+                ImGuizmo::BeginFrame();
 
                 // ---- Scene panel: simulation control + hierarchy.
                 ImGui::SetNextWindowPos({12.0f, 12.0f}, ImGuiCond_FirstUseEver);
@@ -389,18 +414,36 @@ int main() {
                     }
                 }
                 ImGui::End();
-            }
 
-            // Orbit camera — only when the UI isn't using the mouse.
-            if (!(ui && ui->wantCaptureMouse())) {
-                if (input.isMouseDown(forge::MouseButton::Right)) {
-                    camYaw += static_cast<float>(input.mouseDeltaX()) * 0.4f;
-                    camPitch = std::clamp(camPitch + static_cast<float>(input.mouseDeltaY()) * 0.4f,
-                                          -85.0f, 85.0f);
+                // ---- Translate gizmo on the selection (P7.3). ImGuizmo
+                // flips Y itself (expects GL-style NDC), so it gets the
+                // UNFLIPPED projection — hand it ours and everything drags
+                // upside-down. Same fov/near/far the renderer uses.
+                if (scene.alive(selected)) {
+                    const ImGuiIO& io = ImGui::GetIO();
+                    ImGuizmo::SetOrthographic(false);
+                    ImGuizmo::SetRect(0.0f, 0.0f, io.DisplaySize.x, io.DisplaySize.y);
+                    const glm::mat4 view =
+                        glm::lookAt(camera.position, camera.target, glm::vec3(0, 1, 0));
+                    const glm::mat4 proj = glm::perspective(glm::radians(camera.fovYDegrees),
+                                                            io.DisplaySize.x / io.DisplaySize.y,
+                                                            camera.nearPlane, camera.farPlane);
+
+                    auto& t = scene.get<TransformC>(selected);
+                    auto* body = scene.tryGet<BodyC>(selected);
+                    glm::mat4 model =
+                        (body != nullptr && body->dynamic)
+                            ? physics.bodyTransform(body->id) * glm::scale(glm::mat4(1.0f), t.scale)
+                            : trs(t);
+                    if (ImGuizmo::Manipulate(&view[0][0], &proj[0][0], ImGuizmo::TRANSLATE,
+                                             ImGuizmo::WORLD, &model[0][0])) {
+                        const glm::vec3 newPosition{model[3]};
+                        t.position = newPosition;
+                        if (body != nullptr) {
+                            physics.teleport(body->id, newPosition);
+                        }
+                    }
                 }
-                camDist =
-                    std::clamp(camDist * std::pow(0.92f, static_cast<float>(input.scrollDeltaY())),
-                               2.0f, 30.0f);
             }
 
             // Simulation control: pause freezes gameplay+physics; Step runs
@@ -435,14 +478,6 @@ int main() {
             }
 
             if (renderer) {
-                const float yawR = glm::radians(camYaw);
-                const float pitchR = glm::radians(camPitch);
-                const forge::Camera camera{
-                    .position = camTarget + camDist * glm::vec3(std::sin(yawR) * std::cos(pitchR),
-                                                                std::sin(pitchR),
-                                                                std::cos(yawR) * std::cos(pitchR)),
-                    .target = camTarget};
-
                 // The frame's draw list, straight from the scene: physics
                 // owns dynamic transforms, TransformC owns everything else.
                 std::vector<forge::DrawItem> items;
