@@ -1033,8 +1033,13 @@ void Renderer::drawFrame(const Camera& camera, std::span<const DrawItem> items) 
     // rendered AND sampled through this same matrix, so the convention
     // cancels out; only the swapchain path needs the flip.
     const glm::vec3 lightDir = glm::normalize(glm::vec3(0.5f, 0.8f, 0.35f));
-    const glm::mat4 lightView = glm::lookAt(lightDir * 10.0f, glm::vec3(0.0f), glm::vec3(0, 1, 0));
-    const glm::mat4 lightProj = glm::ortho(-6.0f, 6.0f, -6.0f, 6.0f, 0.1f, 20.0f);
+    // The light frustum FOLLOWS the camera: a fixed origin-centered box left
+    // everything beyond its far plane failing the shadow compare (ref > 1.0)
+    // -> whole rooms in permanent fake shadow. Texel swim on camera motion is
+    // the known cost; snapping is a polish-pass item.
+    const glm::mat4 lightView =
+        glm::lookAt(camera.position + lightDir * 25.0f, camera.position, glm::vec3(0, 1, 0));
+    const glm::mat4 lightProj = glm::ortho(-16.0f, 16.0f, -16.0f, 16.0f, 0.1f, 60.0f);
 
     FrameUbo ubo{};
     ubo.viewProj = proj * view;

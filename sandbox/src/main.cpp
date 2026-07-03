@@ -246,6 +246,9 @@ int main() {
         forge::TextureHandle crateTexture{};
         forge::TextureHandle laserTexture{};
         forge::TextureHandle glassTexture{};
+        forge::TextureHandle concreteTexture{};
+        forge::TextureHandle floorTexture{};
+        forge::TextureHandle metalTexture{};
         if (renderer) {
             std::vector<forge::Vertex> vertices;
             std::vector<uint32_t> indices;
@@ -264,6 +267,15 @@ int main() {
             const auto glassImage = forge::assets::loadImage("assets/textures/glass.png");
             glassTexture =
                 renderer->addTexture(glassImage.width, glassImage.height, glassImage.rgba);
+            const auto concreteImage = forge::assets::loadImage("assets/textures/concrete.png");
+            concreteTexture =
+                renderer->addTexture(concreteImage.width, concreteImage.height, concreteImage.rgba);
+            const auto floorImage = forge::assets::loadImage("assets/textures/floor.png");
+            floorTexture =
+                renderer->addTexture(floorImage.width, floorImage.height, floorImage.rgba);
+            const auto metalImage = forge::assets::loadImage("assets/textures/metal.png");
+            metalTexture =
+                renderer->addTexture(metalImage.width, metalImage.height, metalImage.rgba);
         }
 
         // Physics owns WHERE dynamic things are; the ECS owns WHAT exists.
@@ -271,6 +283,7 @@ int main() {
         forge::ecs::Registry scene;
 
         // halfExtents == 0 means "no collider".
+        std::function<void(uint32_t, forge::ecs::Entity)> spawnRegisterHook;
         const auto spawnEntity = [&](std::string name, glm::vec3 position, glm::vec3 scale,
                                      forge::MeshHandle mesh, forge::TextureHandle texture,
                                      glm::vec3 halfExtents, bool dynamic,
@@ -286,24 +299,27 @@ int main() {
                     halfExtents, position,
                     dynamic ? forge::BodyType::Dynamic : forge::BodyType::Static, restitution);
                 scene.emplace<BodyC>(e, BodyC{body, dynamic});
+                if (spawnRegisterHook) {
+                    spawnRegisterHook(body.value, e);
+                }
             }
             return e;
         };
 
         // ---- VAULT week 1: the grey-box tutorial room. Floor top at y=0.
         const auto checker = forge::Renderer::defaultTexture();
-        spawnEntity("Floor", {0.0f, -0.2f, 0.0f}, {14.0f, 0.4f, 14.0f}, cubeMesh, checker,
+        spawnEntity("Floor", {0.0f, -0.2f, 0.0f}, {14.0f, 0.4f, 14.0f}, cubeMesh, concreteTexture,
                     {7.0f, 0.2f, 7.0f}, false);
         // North wall has the DOORWAY: two segments + a sliding Exit Door.
-        spawnEntity("Wall NW", {-4.25f, 1.6f, -7.2f}, {6.3f, 3.6f, 0.4f}, cubeMesh, checker,
+        spawnEntity("Wall NW", {-4.25f, 1.6f, -7.2f}, {6.3f, 3.6f, 0.4f}, cubeMesh, concreteTexture,
                     {3.15f, 1.8f, 0.2f}, false);
-        spawnEntity("Wall NE", {4.25f, 1.6f, -7.2f}, {6.3f, 3.6f, 0.4f}, cubeMesh, checker,
+        spawnEntity("Wall NE", {4.25f, 1.6f, -7.2f}, {6.3f, 3.6f, 0.4f}, cubeMesh, concreteTexture,
                     {3.15f, 1.8f, 0.2f}, false);
-        spawnEntity("Wall N Top", {0.0f, 3.0f, -7.2f}, {2.2f, 0.8f, 0.4f}, cubeMesh, checker,
-                    {1.1f, 0.4f, 0.2f}, false);
+        spawnEntity("Wall N Top", {0.0f, 3.0f, -7.2f}, {2.2f, 0.8f, 0.4f}, cubeMesh,
+                    concreteTexture, {1.1f, 0.4f, 0.2f}, false);
         spawnEntity("Exit Door", {0.0f, 1.25f, -7.2f}, {2.2f, 2.5f, 0.4f}, cubeMesh, crateTexture,
                     {1.1f, 1.25f, 0.2f}, false);
-        spawnEntity("Exit Pad", {0.0f, -0.2f, -8.6f}, {3.0f, 0.4f, 2.6f}, cubeMesh, checker,
+        spawnEntity("Exit Pad", {0.0f, -0.2f, -8.6f}, {3.0f, 0.4f, 2.6f}, cubeMesh, concreteTexture,
                     {1.5f, 0.2f, 1.3f}, false);
         // Glass pane just behind the exit door: throw a crate through it.
         spawnEntity("Glass", {0.0f, 1.05f, -7.9f}, {2.2f, 2.1f, 0.12f}, cubeMesh, glassTexture,
@@ -316,16 +332,16 @@ int main() {
                     laserTexture, {0.15f, 0.15f, 0.15f}, false);
         spawnEntity("Laser Beam", {0.0f, 1.1f, -5.0f}, {13.2f, 0.05f, 0.05f}, cubeMesh,
                     laserTexture, glm::vec3(0.0f), false); // no collider
-        spawnEntity("Wall S", {0.0f, 1.6f, 7.2f}, {14.8f, 3.6f, 0.4f}, cubeMesh, checker,
+        spawnEntity("Wall S", {0.0f, 1.6f, 7.2f}, {14.8f, 3.6f, 0.4f}, cubeMesh, concreteTexture,
                     {7.4f, 1.8f, 0.2f}, false);
-        spawnEntity("Wall E", {7.2f, 1.6f, 0.0f}, {0.4f, 3.6f, 14.8f}, cubeMesh, checker,
+        spawnEntity("Wall E", {7.2f, 1.6f, 0.0f}, {0.4f, 3.6f, 14.8f}, cubeMesh, concreteTexture,
                     {0.2f, 1.8f, 7.4f}, false);
-        spawnEntity("Wall W", {-7.2f, 1.6f, 0.0f}, {0.4f, 3.6f, 14.8f}, cubeMesh, checker,
+        spawnEntity("Wall W", {-7.2f, 1.6f, 0.0f}, {0.4f, 3.6f, 14.8f}, cubeMesh, concreteTexture,
                     {0.2f, 1.8f, 7.4f}, false);
         // Step (walkable, tests step-offset) and ledge (needs the elevator).
-        spawnEntity("Step", {3.0f, 0.15f, 2.0f}, {2.4f, 0.3f, 2.4f}, cubeMesh, checker,
+        spawnEntity("Step", {3.0f, 0.15f, 2.0f}, {2.4f, 0.3f, 2.4f}, cubeMesh, concreteTexture,
                     {1.2f, 0.15f, 1.2f}, false);
-        spawnEntity("Ledge", {5.5f, 1.1f, -5.5f}, {3.0f, 2.2f, 3.0f}, cubeMesh, checker,
+        spawnEntity("Ledge", {5.5f, 1.1f, -5.5f}, {3.0f, 2.2f, 3.0f}, cubeMesh, concreteTexture,
                     {1.5f, 1.1f, 1.5f}, false);
         // Throwables — Crate A sits dead ahead of the spawn look direction.
         spawnEntity("Crate A", {0.0f, 0.4f, 2.5f}, {0.5f, 0.5f, 0.5f}, cubeMesh, crateTexture,
@@ -393,6 +409,11 @@ int main() {
                 bodyToEntity[b->id.value] = e;
             }
         });
+        // Grab fix: Lua-spawned entities (room crates!) must be glove-visible
+        // too — registration now happens for every spawn path.
+        spawnRegisterHook = [&bodyToEntity](uint32_t body, forge::ecs::Entity e) {
+            bodyToEntity[body] = e;
+        };
         const auto onSpawnedOld = script.onBoxSpawned;
         script.onBoxSpawned = [&, onSpawnedOld](forge::BodyId body, glm::vec3 he) {
             onSpawnedOld(body, he);
@@ -455,6 +476,12 @@ int main() {
                 tex = laserTexture;
             } else if (texture == "glass") {
                 tex = glassTexture;
+            } else if (texture == "concrete") {
+                tex = concreteTexture;
+            } else if (texture == "floor") {
+                tex = floorTexture;
+            } else if (texture == "metal") {
+                tex = metalTexture;
             }
             spawnEntity(name, pos, sc, cubeMesh, tex, half, dynamic, 0.4f);
         };

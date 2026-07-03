@@ -78,7 +78,7 @@ end
 local drone = {
     name = "Drone", speed = 6.0, parkedAt = nil, -- parkId or nil
     parks = { -- id -> {pos, zMin, zMax (room extent)}
-        p5 = { pos = vec3(3.5, 0.8, -63.0),  zMin = -67.4, zMax = -57.4 },
+        p5 = { pos = vec3(3.5, 0.5, -63.0),  zMin = -67.4, zMax = -57.4 },
         b6 = { pos = vec3(0.0, 1.1, -74.0),  zMin = -79.4, zMax = -69.4 },
         b8 = { pos = vec3(0.0, 1.1, -97.0),  zMin = -103.4, zMax = -93.4 },
     },
@@ -92,21 +92,21 @@ end
 
 local function shell(id, z0, z1, w) -- floor + side walls (z0 > z1)
     local cz, L = (z0 + z1) * 0.5, z0 - z1
-    box(id .. " Floor", vec3(0, -0.2, cz), vec3(w, 0.4, L), "checker", true)
-    box(id .. " Wall W", vec3(-w * 0.5, 1.6, cz), vec3(0.4, 3.6, L), "checker", true)
-    box(id .. " Wall E", vec3(w * 0.5, 1.6, cz), vec3(0.4, 3.6, L), "checker", true)
+    box(id .. " Floor", vec3(0, -0.2, cz), vec3(w, 0.4, L), "floor", true)
+    box(id .. " Wall W", vec3(-w * 0.5, 1.6, cz), vec3(0.4, 3.6, L), "concrete", true)
+    box(id .. " Wall E", vec3(w * 0.5, 1.6, cz), vec3(0.4, 3.6, L), "concrete", true)
 end
 
 local function framedWall(id, z) -- full wall with a 2.2m doorway gap
-    box(id .. " W", vec3(-3.05, 1.6, z), vec3(3.9, 3.6, 0.4), "checker", true)
-    box(id .. " E", vec3(3.05, 1.6, z), vec3(3.9, 3.6, 0.4), "checker", true)
-    box(id .. " Top", vec3(0, 3.0, z), vec3(2.2, 0.8, 0.4), "checker", true)
+    box(id .. " W", vec3(-3.05, 1.6, z), vec3(3.9, 3.6, 0.4), "concrete", true)
+    box(id .. " E", vec3(3.05, 1.6, z), vec3(3.9, 3.6, 0.4), "concrete", true)
+    box(id .. " Top", vec3(0, 3.0, z), vec3(2.2, 0.8, 0.4), "concrete", true)
 end
 
 local function corridor(id, z0) -- 2m long, walls FLUSH with the 2.2m frames
-    box(id .. " Floor", vec3(0, -0.2, z0 - 1.0), vec3(3.0, 0.4, 2.0), "checker", true)
-    box(id .. " Wall W", vec3(-1.3, 1.6, z0 - 1.0), vec3(0.4, 3.6, 2.0), "checker", true)
-    box(id .. " Wall E", vec3(1.3, 1.6, z0 - 1.0), vec3(0.4, 3.6, 2.0), "checker", true)
+    box(id .. " Floor", vec3(0, -0.2, z0 - 1.0), vec3(3.0, 0.4, 2.0), "floor", true)
+    box(id .. " Wall W", vec3(-1.3, 1.6, z0 - 1.0), vec3(0.4, 3.6, 2.0), "concrete", true)
+    box(id .. " Wall E", vec3(1.3, 1.6, z0 - 1.0), vec3(0.4, 3.6, 2.0), "concrete", true)
 end
 
 local function crate(name, x, z)
@@ -130,18 +130,18 @@ local function buildRooms()
         shell(id, z0, z0 - 10, 10)
         framedWall(id .. " NearWall", z0)      -- gap fix: rooms had open entries
         framedWall(id .. " FarWall", z0 - 10)
-        box("Door " .. i, vec3(0, 1.25, z0 - 10), vec3(2.2, 2.5, 0.4), "crate", true)
+        box("Door " .. i, vec3(0, 1.25, z0 - 10), vec3(2.2, 2.5, 0.4), "metal", true)
         if i < 8 then corridor("Cor" .. i, z0 - 10) end
     end
     -- plates (visual slabs; logic reads the plates2 regions)
     for _, pl in ipairs(plates2) do
         box("Plate " .. pl.id, vec3(pl.center.x, 0.1, pl.center.z), vec3(1.4, 0.2, 1.4),
-            "laser", true)
+            "metal", true)
     end
     -- room contents
     crate("Crate R1", -3.5, -17.0)
     laserRig(2, -26.0)
-    box("Pedestal 2", vec3(0, 0.5, -26.0), vec3(1.0, 1.0, 1.0), "checker", true)
+    box("Pedestal 2", vec3(0, 0.5, -26.0), vec3(1.0, 1.0, 1.0), "metal", true)
     crate("Crate R2", -3.5, -23.5)
     crate("Crate R3", 3.5, -35.0)
     box("Glass 3", vec3(0, 1.05, -44.1), vec3(2.2, 2.1, 0.12), "glass", true)
@@ -157,10 +157,10 @@ local function buildRooms()
     crate("Crate R8a", -3.0, -94.5)
     crate("Crate R8b", 3.0, -94.5)
     -- end section (sealed: pad, side walls, cap)
-    box("End Pad", vec3(0, -0.2, -104.9), vec3(3.0, 0.4, 3.0), "checker", true)
-    box("End Wall W", vec3(-1.3, 1.6, -104.9), vec3(0.4, 3.6, 3.0), "checker", true)
-    box("End Wall E", vec3(1.3, 1.6, -104.9), vec3(0.4, 3.6, 3.0), "checker", true)
-    box("End Cap", vec3(0, 1.6, -106.5), vec3(3.0, 3.6, 0.4), "checker", true)
+    box("End Pad", vec3(0, -0.2, -104.9), vec3(3.0, 0.4, 3.0), "floor", true)
+    box("End Wall W", vec3(-1.3, 1.6, -104.9), vec3(0.4, 3.6, 3.0), "concrete", true)
+    box("End Wall E", vec3(1.3, 1.6, -104.9), vec3(0.4, 3.6, 3.0), "concrete", true)
+    box("End Cap", vec3(0, 1.6, -106.5), vec3(3.0, 3.6, 0.4), "concrete", true)
     -- the companion drone (visual entity; pure Lua steering)
     box("Drone", vec3(1.0, 2.4, 3.0), vec3(0.4, 0.25, 0.4), "glass", false)
     forge.log("rooms 1-8 built (near walls + flush corridors: map sealed)")
