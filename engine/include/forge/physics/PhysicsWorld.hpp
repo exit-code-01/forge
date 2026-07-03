@@ -74,8 +74,18 @@ public:
     // Gravity-glove support: hard-set velocity (mass-independent spring
     // carry, throws) and "what is the crosshair pointing at".
     void setLinearVelocity(BodyId id, const glm::vec3& velocity);
-    [[nodiscard]] std::optional<BodyId> raycast(const glm::vec3& origin, const glm::vec3& direction,
-                                                float maxDistance) const;
+    [[nodiscard]] glm::vec3 linearVelocity(BodyId id) const;
+
+    struct RaycastHit {
+        BodyId body{};
+        float distance = 0.0f; // meters along the (normalized) direction
+    };
+    [[nodiscard]] std::optional<RaycastHit>
+    raycast(const glm::vec3& origin, const glm::vec3& direction, float maxDistance) const;
+
+    // Week 2 (glass): remove a body permanently. The caller owns forgetting
+    // the handle — using it afterward is a stale-handle bug by definition.
+    void removeBody(BodyId id);
 
     // THE character controller (Jolt CharacterVirtual): capsule centered at
     // `position`, total height = 2*(cylinderHalfHeight + radius). Exactly

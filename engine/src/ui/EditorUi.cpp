@@ -40,13 +40,18 @@ EditorUi::EditorUi(Window& window, Renderer& renderer) : m_impl(std::make_unique
 
     // ImGui's own descriptor pool: FREE_DESCRIPTOR_SET because the backend
     // allocates/frees per-texture sets (fonts) itself.
-    const VkDescriptorPoolSize poolSize{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 16};
+    // 1.92.x allocates split SAMPLER/SAMPLED_IMAGE sets as well as combined.
+    const VkDescriptorPoolSize poolSizes[] = {
+        {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 16},
+        {VK_DESCRIPTOR_TYPE_SAMPLER, 16},
+        {VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 16},
+    };
     VkDescriptorPoolCreateInfo poolInfo{};
     poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
     poolInfo.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
-    poolInfo.maxSets = 16;
-    poolInfo.poolSizeCount = 1;
-    poolInfo.pPoolSizes = &poolSize;
+    poolInfo.maxSets = 48;
+    poolInfo.poolSizeCount = 3;
+    poolInfo.pPoolSizes = poolSizes;
     if (vkCreateDescriptorPool(vk.device, &poolInfo, nullptr, &m_impl->pool) != VK_SUCCESS) {
         throw std::runtime_error("vkCreateDescriptorPool (imgui) failed");
     }

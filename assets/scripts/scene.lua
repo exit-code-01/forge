@@ -14,7 +14,22 @@ local door = {
     open   = vec3(0.0, 3.55, -7.2), -- slides UP into the wall
     speed  = 2.2,                   -- m/s
 }
-local exitZ = -7.6 -- past the doorway = room complete
+local laser = {
+    origin   = vec3(-6.7, 1.1, -5.0), -- just past the emitter face
+    dir      = vec3(1.0, 0.0, 0.0),
+    maxDist  = 13.5,
+    beamName = "Laser Beam",
+    receiver = "Laser Receiver",
+    blocked  = false,
+}
+local glass = {
+    name   = "Glass",
+    center = vec3(0.0, 1.05, -7.9),
+    half   = vec3(1.3, 1.2, 0.4), -- slightly fat: catches incoming crates
+    breakSpeed = 4.5,
+    broken = false,
+}
+local exitZ = -8.3 -- past the (former) glass = room complete
 -- ---------------------------------------------------------------------------
 
 local spawnCount = 0
@@ -37,7 +52,7 @@ end
 
 function onUpdate(dt)
     -- Pressure plate: any dynamic body in the region holds it down.
-    local pressedNow = forge.physics.overlap(plate.center, plate.half) > 0
+    local pressedNow = #forge.physics.overlap(plate.center, plate.half) > 0
     if pressedNow ~= plate.pressed then
         plate.pressed = pressedNow
         forge.audio.play(pressedNow and "assets/sounds/land.wav" or "assets/sounds/grab.wav")
@@ -49,6 +64,37 @@ function onUpdate(dt)
     local target = plate.pressed and door.open or door.closed
     local at = forge.scene.getPosition(door.name)
     forge.scene.setPosition(door.name, moveTowards(at, target, door.speed * dt))
+
+    -- Laser: raycast emitter -> receiver; anything in between blocks it.
+    -- The beam VISUAL stretches to the first hit (held crates cast a gap).
+    local hitBody, hitDist = forge.physics.raycast(laser.origin, laser.dir, laser.maxDist)
+    local dist = hitDist or laser.maxDist
+    forge.scene.setPosition(laser.beamName,
+                            vec3(laser.origin.x + dist * 0.5, laser.origin.y, laser.origin.z))
+    forge.scene.setScale(laser.beamName, vec3(dist, 0.05, 0.05))
+    local receiverPos = forge.scene.getPosition(laser.receiver)
+    local blockedNow = dist < (receiverPos.x - laser.origin.x) - 0.3
+    if blockedNow ~= laser.blocked then
+        laser.blocked = blockedNow
+        forge.audio.play(blockedNow and "assets/sounds/grab.wav" or "assets/sounds/jump.wav")
+        forge.log(blockedNow and "laser: BLOCKED" or "laser: circuit restored")
+    end
+
+    -- Glass: any dynamic body moving fast enough through its region breaks it.
+    if not glass.broken then
+        for _, body in ipairs(forge.physics.overlap(glass.center, glass.half)) do
+            local v = forge.physics.velocity(body)
+            local speed = math.sqrt(v.x * v.x + v.y * v.y + v.z * v.z)
+            if speed > glass.breakSpeed then
+                glass.broken = true
+                forge.scene.destroy(glass.name)
+                forge.fx.burst(glass.center, 40)
+                forge.audio.play("assets/sounds/shatter.wav")
+                forge.log("glass: SHATTERED (impact " .. string.format("%.1f", speed) .. " m/s)")
+                break
+            end
+        end
+    end
 
     -- Win condition: the player walked out through the doorway.
     if not won then

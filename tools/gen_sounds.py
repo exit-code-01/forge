@@ -82,6 +82,14 @@ def main() -> None:
         return 0.16 * hp * math.exp(-t * 60.0)
     render("step.wav", 0.06, step)
 
+    # shatter: bright noisy crash for breaking glass.
+    def shatter(t):
+        i = int(t * RATE)
+        hp = noise[i % RATE] - noise[(i - 1) % RATE]
+        ring = math.sin(2.0 * math.pi * 2900.0 * t) * 0.3
+        return 0.7 * (hp + ring) * math.exp(-t * 11.0)
+    render("shatter.wav", 0.3, shatter)
+
 
 if __name__ == "__main__":
     main()

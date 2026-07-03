@@ -64,6 +64,8 @@ public:
     // what a name means (ECS lookup + collider sync). Set before bindScene().
     std::function<void(const std::string& name, glm::vec3 position)> onSetEntityPosition;
     std::function<glm::vec3(const std::string& name)> onGetEntityPosition;
+    std::function<void(const std::string& name, glm::vec3 scale)> onSetEntityScale;
+    std::function<void(const std::string& name)> onDestroyEntity; // glass shatters
     std::function<glm::vec3()> onPlayerPosition;
     // forge.scene.setPosition/getPosition(name), forge.player.position().
     void bindScene();

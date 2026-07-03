@@ -244,6 +244,8 @@ int main() {
         forge::MeshHandle cubeMesh{};
         forge::MeshHandle torusMesh{};
         forge::TextureHandle crateTexture{};
+        forge::TextureHandle laserTexture{};
+        forge::TextureHandle glassTexture{};
         if (renderer) {
             std::vector<forge::Vertex> vertices;
             std::vector<uint32_t> indices;
@@ -256,6 +258,12 @@ int main() {
             const auto crateImage = forge::assets::loadImage("assets/textures/crate.png");
             crateTexture =
                 renderer->addTexture(crateImage.width, crateImage.height, crateImage.rgba);
+            const auto laserImage = forge::assets::loadImage("assets/textures/laser.png");
+            laserTexture =
+                renderer->addTexture(laserImage.width, laserImage.height, laserImage.rgba);
+            const auto glassImage = forge::assets::loadImage("assets/textures/glass.png");
+            glassTexture =
+                renderer->addTexture(glassImage.width, glassImage.height, glassImage.rgba);
         }
 
         // Physics owns WHERE dynamic things are; the ECS owns WHAT exists.
@@ -297,6 +305,17 @@ int main() {
                     {1.1f, 1.25f, 0.2f}, false);
         spawnEntity("Exit Pad", {0.0f, -0.2f, -8.6f}, {3.0f, 0.4f, 2.6f}, cubeMesh, checker,
                     {1.5f, 0.2f, 1.3f}, false);
+        // Glass pane just behind the exit door: throw a crate through it.
+        spawnEntity("Glass", {0.0f, 1.05f, -7.9f}, {2.2f, 2.1f, 0.12f}, cubeMesh, glassTexture,
+                    {1.1f, 1.05f, 0.06f}, false);
+        // Laser circuit across the room at chest height (indicator for now;
+        // rooms 1-3 wire it into puzzles). Beam is visual-only, Lua-driven.
+        spawnEntity("Laser Emitter", {-6.9f, 1.1f, -5.0f}, {0.3f, 0.3f, 0.3f}, cubeMesh,
+                    laserTexture, {0.15f, 0.15f, 0.15f}, false);
+        spawnEntity("Laser Receiver", {6.9f, 1.1f, -5.0f}, {0.3f, 0.3f, 0.3f}, cubeMesh,
+                    laserTexture, {0.15f, 0.15f, 0.15f}, false);
+        spawnEntity("Laser Beam", {0.0f, 1.1f, -5.0f}, {13.2f, 0.05f, 0.05f}, cubeMesh,
+                    laserTexture, glm::vec3(0.0f), false); // no collider
         spawnEntity("Wall S", {0.0f, 1.6f, 7.2f}, {14.8f, 3.6f, 0.4f}, cubeMesh, checker,
                     {7.4f, 1.8f, 0.2f}, false);
         spawnEntity("Wall E", {7.2f, 1.6f, 0.0f}, {0.4f, 3.6f, 14.8f}, cubeMesh, checker,
@@ -410,6 +429,23 @@ int main() {
             const auto e = findByName(name);
             return scene.alive(e) ? scene.get<TransformC>(e).position : glm::vec3(0.0f);
         };
+        script.onSetEntityScale = [&](const std::string& name, glm::vec3 sc) {
+            const auto e = findByName(name);
+            if (scene.alive(e)) {
+                scene.get<TransformC>(e).scale = sc;
+            }
+        };
+        script.onDestroyEntity = [&](const std::string& name) {
+            const auto e = findByName(name);
+            if (!scene.alive(e)) {
+                return;
+            }
+            if (auto* b = scene.tryGet<BodyC>(e)) {
+                bodyToEntity.erase(b->id.value);
+                physics.removeBody(b->id);
+            }
+            scene.destroy(e);
+        };
         script.onPlayerPosition = [&]() { return physics.characterPosition(); };
         script.bindScene();
         script.runFile("assets/scripts/scene.lua");
@@ -511,16 +547,16 @@ int main() {
                         audio.play("assets/sounds/throw.wav");
                         sparks.burst(eye + look * 1.2f, 12);
                     } else if (const auto hit = physics.raycast(eye, look, 3.5f)) {
-                        const auto it = bodyToEntity.find(hit->value);
+                        const auto it = bodyToEntity.find(hit->body.value);
                         auto* bc =
                             it != bodyToEntity.end() ? scene.tryGet<BodyC>(it->second) : nullptr;
                         if (bc != nullptr && bc->dynamic) {
-                            player.held = *hit;
+                            player.held = hit->body;
                             player.holding = true;
                             audio.play("assets/sounds/grab.wav");
                             FORGE_INFO("glove: grabbed {}", scene.get<Name>(it->second).value);
                         } else {
-                            FORGE_INFO("glove: hit body {} (not grabbable)", hit->value);
+                            FORGE_INFO("glove: hit body {} (not grabbable)", hit->body.value);
                         }
                     } else {
                         FORGE_INFO(

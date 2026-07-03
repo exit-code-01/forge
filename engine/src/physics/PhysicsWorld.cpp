@@ -194,15 +194,29 @@ void PhysicsWorld::setLinearVelocity(BodyId id, const glm::vec3& velocity) {
         JPH::BodyID(id.value), JPH::Vec3(velocity.x, velocity.y, velocity.z));
 }
 
-std::optional<BodyId> PhysicsWorld::raycast(const glm::vec3& origin, const glm::vec3& direction,
-                                            float maxDistance) const {
+std::optional<PhysicsWorld::RaycastHit> PhysicsWorld::raycast(const glm::vec3& origin,
+                                                              const glm::vec3& direction,
+                                                              float maxDistance) const {
     const JPH::RRayCast ray{JPH::RVec3(origin.x, origin.y, origin.z),
                             JPH::Vec3(direction.x, direction.y, direction.z) * maxDistance};
     JPH::RayCastResult hit;
     if (m_impl->system->GetNarrowPhaseQuery().CastRay(ray, hit)) {
-        return BodyId{hit.mBodyID.GetIndexAndSequenceNumber()};
+        return RaycastHit{BodyId{hit.mBodyID.GetIndexAndSequenceNumber()},
+                          hit.mFraction * maxDistance};
     }
     return std::nullopt;
+}
+
+glm::vec3 PhysicsWorld::linearVelocity(BodyId id) const {
+    const JPH::Vec3 v = m_impl->system->GetBodyInterface().GetLinearVelocity(JPH::BodyID(id.value));
+    return {v.GetX(), v.GetY(), v.GetZ()};
+}
+
+void PhysicsWorld::removeBody(BodyId id) {
+    JPH::BodyInterface& bodies = m_impl->system->GetBodyInterface();
+    const JPH::BodyID body(id.value);
+    bodies.RemoveBody(body);
+    bodies.DestroyBody(body);
 }
 
 void PhysicsWorld::createCharacter(const glm::vec3& position, float radius,

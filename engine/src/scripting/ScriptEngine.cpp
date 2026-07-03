@@ -11,7 +11,9 @@
 
 #include <cctype>
 #include <optional>
+#include <tuple>
 #include <utility>
+#include <vector>
 
 namespace forge {
 
@@ -85,10 +87,25 @@ void ScriptEngine::bindPhysics(PhysicsWorld& physics) {
         const glm::mat4 transform = physics.bodyTransform(BodyId{body});
         return glm::vec3(transform[3]);
     });
-    // The pressure-plate primitive: count of dynamic bodies in a region.
+    // The pressure-plate primitive: ids of dynamic bodies in a region.
     phys.set_function("overlap", [&physics](const glm::vec3& center, const glm::vec3& half) {
-        return static_cast<int>(physics.overlapBox(center, half).size());
+        std::vector<uint32_t> ids;
+        for (const BodyId id : physics.overlapBox(center, half)) {
+            ids.push_back(id.value);
+        }
+        return sol::as_table(ids);
     });
+    phys.set_function("velocity",
+                      [&physics](uint32_t body) { return physics.linearVelocity(BodyId{body}); });
+    // Returns (bodyId, distance) or nil: the laser line-of-sight query.
+    phys.set_function("raycast",
+                      [&physics](const glm::vec3& origin, const glm::vec3& dir,
+                                 float maxDist) -> std::optional<std::tuple<uint32_t, float>> {
+                          if (const auto hit = physics.raycast(origin, dir, maxDist)) {
+                              return std::make_tuple(hit->body.value, hit->distance);
+                          }
+                          return std::nullopt;
+                      });
 }
 
 void ScriptEngine::bindInput(const Input& input) {
@@ -116,6 +133,16 @@ void ScriptEngine::bindScene() {
     });
     sceneTable.set_function("getPosition", [this](const std::string& name) {
         return onGetEntityPosition ? onGetEntityPosition(name) : glm::vec3(0.0f);
+    });
+    sceneTable.set_function("setScale", [this](const std::string& name, const glm::vec3& scale) {
+        if (onSetEntityScale) {
+            onSetEntityScale(name, scale);
+        }
+    });
+    sceneTable.set_function("destroy", [this](const std::string& name) {
+        if (onDestroyEntity) {
+            onDestroyEntity(name);
+        }
     });
     sol::table playerTable = forge.create_named("player");
     playerTable.set_function(
