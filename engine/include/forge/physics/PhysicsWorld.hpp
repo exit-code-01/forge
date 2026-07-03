@@ -62,6 +62,11 @@ public:
     // Wakes the body if it was sleeping.
     void addLinearVelocity(BodyId id, const glm::vec3& velocity);
 
+    // Editor move: set position directly, clearing velocities (a dragged
+    // object should not remember it was falling). Rotation is preserved.
+    // Works on static bodies too (colliders follow editor placement).
+    void teleport(BodyId id, const glm::vec3& position);
+
 private:
     struct Impl;
     std::unique_ptr<Impl> m_impl;

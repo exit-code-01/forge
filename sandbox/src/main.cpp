@@ -19,11 +19,14 @@
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/vec3.hpp>
 
-#include <array>
+#include <algorithm>
 #include <chrono>
+#include <cmath>
+#include <cstdio>
 #include <exception>
 #include <filesystem>
 #include <memory>
+#include <string>
 #include <vector>
 
 namespace {
@@ -127,6 +130,34 @@ void buildCube(std::vector<forge::Vertex>& vertices, std::vector<uint32_t>& indi
     appendFace(vertices, indices, -y, x, z);  // -Y
 }
 
+// ---- Scene components (P7.2): the scene IS the ECS now. The editor's
+// hierarchy and inspector operate on these; the renderer consumes the
+// DrawItems built from them each frame.
+struct Name {
+    std::string value;
+};
+struct TransformC {
+    glm::vec3 position{0.0f};
+    glm::vec3 eulerDeg{0.0f}; // yaw/pitch/roll editing units; radians internally
+    glm::vec3 scale{1.0f};
+};
+struct MeshRendererC {
+    forge::MeshHandle mesh;
+    forge::TextureHandle texture;
+};
+struct BodyC {
+    forge::BodyId id{};
+    bool dynamic = false;
+};
+
+glm::mat4 trs(const TransformC& t) {
+    glm::mat4 m = glm::translate(glm::mat4(1.0f), t.position);
+    m = glm::rotate(m, glm::radians(t.eulerDeg.y), {0.0f, 1.0f, 0.0f});
+    m = glm::rotate(m, glm::radians(t.eulerDeg.x), {1.0f, 0.0f, 0.0f});
+    m = glm::rotate(m, glm::radians(t.eulerDeg.z), {0.0f, 0.0f, 1.0f});
+    return glm::scale(m, t.scale);
+}
+
 // Headless scripting smoke: VM boot + a C++ <-> Lua round trip, no window
 // needed — CI exercises Lua/sol2 on all three OSes.
 void scriptDemo() {
@@ -219,41 +250,62 @@ int main() {
                 renderer->addTexture(crateImage.width, crateImage.height, crateImage.rgba);
         }
 
-        // Physics owns WHERE things are; rendering only asks. The mesh is a
-        // unit cube, so each body's render matrix = bodyTransform * scale(size).
+        // Physics owns WHERE dynamic things are; the ECS owns WHAT exists.
         forge::PhysicsWorld physics;
-        physics.addBox({4.0f, 0.1f, 4.0f}, {0.0f, -0.85f, 0.0f}, forge::BodyType::Static);
-        const auto cubeBody =
-            physics.addBox({0.5f, 0.5f, 0.5f}, {0.0f, 3.0f, 0.0f}, forge::BodyType::Dynamic, 0.4f);
-        const glm::mat4 groundOffset = glm::translate(glm::mat4(1.0f), {0.0f, -0.85f, 0.0f}) *
-                                       glm::scale(glm::mat4(1.0f), {8.0f, 0.2f, 8.0f});
+        forge::ecs::Registry scene;
 
-        // The imported torus: static display piece resting on the slab, with
-        // a box collider so the kicked cube bounces off it.
-        const glm::vec3 torusPos{-1.6f, -0.5f, 0.3f};
-        physics.addBox({0.85f, 0.25f, 0.85f}, torusPos, forge::BodyType::Static);
-        const glm::mat4 torusModel = glm::translate(glm::mat4(1.0f), torusPos);
-
-        // Framed so the full drop (y=3 down to the slab) stays in shot.
-        const forge::Camera camera{.position = {4.2f, 2.6f, 5.2f}, .target = {0.0f, 0.6f, 0.0f}};
-
-        // Scripting: gameplay decisions move to Lua. The script spawns
-        // bodies; this list remembers what to DRAW for them (renderer stays
-        // the host's business — ADR-018).
-        struct ScriptedBox {
-            forge::BodyId body;
-            glm::vec3 halfExtents;
+        // halfExtents == 0 means "no collider".
+        const auto spawnEntity = [&](std::string name, glm::vec3 position, glm::vec3 scale,
+                                     forge::MeshHandle mesh, forge::TextureHandle texture,
+                                     glm::vec3 halfExtents, bool dynamic,
+                                     float restitution = 0.3f) {
+            const auto e = scene.create();
+            scene.emplace<Name>(e, Name{std::move(name)});
+            auto& t = scene.emplace<TransformC>(e);
+            t.position = position;
+            t.scale = scale;
+            scene.emplace<MeshRendererC>(e, MeshRendererC{mesh, texture});
+            if (halfExtents != glm::vec3(0.0f)) {
+                const auto body = physics.addBox(
+                    halfExtents, position,
+                    dynamic ? forge::BodyType::Dynamic : forge::BodyType::Static, restitution);
+                scene.emplace<BodyC>(e, BodyC{body, dynamic});
+            }
+            return e;
         };
-        std::vector<ScriptedBox> scriptedBoxes;
 
+        const auto checker = forge::Renderer::defaultTexture();
+        spawnEntity("Ground", {0.0f, -0.85f, 0.0f}, {8.0f, 0.2f, 8.0f}, cubeMesh, checker,
+                    {4.0f, 0.1f, 4.0f}, false);
+        spawnEntity("Torus", {-1.6f, -0.5f, 0.3f}, {1.0f, 1.0f, 1.0f}, torusMesh, crateTexture,
+                    {0.85f, 0.25f, 0.85f}, false);
+        const auto cubeEntity = spawnEntity("Cube", {0.0f, 3.0f, 0.0f}, {1.0f, 1.0f, 1.0f},
+                                            cubeMesh, checker, {0.5f, 0.5f, 0.5f}, true, 0.4f);
+
+        // Scripting: gameplay decisions move to Lua (ADR-018). Script-spawned
+        // bodies become full scene entities — they show up in the hierarchy.
         forge::ScriptEngine script;
         script.bindPhysics(physics);
         script.bindInput(window.input());
-        script.onBoxSpawned = [&scriptedBoxes](forge::BodyId body, glm::vec3 halfExtents) {
-            scriptedBoxes.push_back({body, halfExtents});
+        int scriptBoxCount = 0;
+        script.onBoxSpawned = [&](forge::BodyId body, glm::vec3 halfExtents) {
+            const auto e = scene.create();
+            scene.emplace<Name>(e, Name{"Box " + std::to_string(++scriptBoxCount)});
+            scene.emplace<TransformC>(e).scale = halfExtents * 2.0f;
+            scene.emplace<MeshRendererC>(e, MeshRendererC{cubeMesh, crateTexture});
+            scene.emplace<BodyC>(e, BodyC{body, true});
         };
-        script.setGlobal("cube", cubeBody.value);
+        script.setGlobal("cube", scene.get<BodyC>(cubeEntity).id.value);
         script.runFile("assets/scripts/scene.lua");
+
+        // Editor state: selection, simulation control, orbit camera.
+        forge::ecs::Entity selected = forge::ecs::kNullEntity;
+        bool paused = false;
+        bool stepOnce = false;
+        float camYaw = 39.0f;
+        float camPitch = 17.0f;
+        float camDist = 7.0f;
+        const glm::vec3 camTarget{0.0f, 0.3f, 0.0f};
 
         // Edit assets/textures/crate.png, assets/models/torus.obj, or
         // assets/scripts/scene.lua while this runs — changes land in ~0.5 s.
@@ -277,16 +329,93 @@ int main() {
 
             if (ui) {
                 ui->beginFrame();
+
+                // ---- Scene panel: simulation control + hierarchy.
                 ImGui::SetNextWindowPos({12.0f, 12.0f}, ImGuiCond_FirstUseEver);
-                ImGui::Begin("Forge Editor");
+                ImGui::SetNextWindowSize({250.0f, 400.0f}, ImGuiCond_FirstUseEver);
+                ImGui::Begin("Scene");
                 ImGui::Text("%.1f fps (%.2f ms)", 1.0 / static_cast<double>(dt),
                             static_cast<double>(dt) * 1000.0);
-                ImGui::TextUnformatted("E: box rain   SPACE: kick (Lua)");
+                ImGui::Checkbox("Pause", &paused);
+                ImGui::SameLine();
+                if (ImGui::Button("Step")) {
+                    stepOnce = true;
+                }
+                ImGui::Separator();
+                scene.each<Name>([&](forge::ecs::Entity e, Name& name) {
+                    ImGui::PushID(static_cast<int>(e.index));
+                    if (ImGui::Selectable(name.value.c_str(), selected == e)) {
+                        selected = e;
+                    }
+                    ImGui::PopID();
+                });
+                ImGui::Separator();
+                ImGui::TextDisabled("RMB drag: orbit / wheel: zoom");
+                ImGui::TextDisabled("E: box rain / SPACE: kick (Lua)");
+                ImGui::End();
+
+                // ---- Inspector panel: the selected entity's components.
+                ImGui::SetNextWindowPos({1280.0f - 292.0f, 12.0f}, ImGuiCond_FirstUseEver);
+                ImGui::SetNextWindowSize({280.0f, 300.0f}, ImGuiCond_FirstUseEver);
+                ImGui::Begin("Inspector");
+                if (!scene.alive(selected)) {
+                    ImGui::TextDisabled("select an entity in Scene");
+                } else {
+                    auto& name = scene.get<Name>(selected);
+                    char nameBuf[64]{};
+                    std::snprintf(nameBuf, sizeof(nameBuf), "%s", name.value.c_str());
+                    if (ImGui::InputText("name", nameBuf, sizeof(nameBuf))) {
+                        name.value = nameBuf;
+                    }
+                    auto& t = scene.get<TransformC>(selected);
+                    auto* body = scene.tryGet<BodyC>(selected);
+                    if (body != nullptr && body->dynamic) {
+                        // Physics owns this transform: edit = teleport.
+                        glm::vec3 p = glm::vec3(physics.bodyTransform(body->id)[3]);
+                        if (ImGui::DragFloat3("position", &p.x, 0.05f)) {
+                            physics.teleport(body->id, p);
+                        }
+                        ImGui::TextDisabled("rotation/scale: physics-driven");
+                        if (ImGui::Button("Kick")) {
+                            physics.addLinearVelocity(body->id, {0.6f, 6.0f, 0.4f});
+                        }
+                    } else {
+                        const bool moved = ImGui::DragFloat3("position", &t.position.x, 0.05f);
+                        ImGui::DragFloat3("rotation", &t.eulerDeg.x, 0.5f);
+                        ImGui::DragFloat3("scale", &t.scale.x, 0.02f);
+                        if (moved && body != nullptr) {
+                            physics.teleport(body->id, t.position); // collider follows
+                        }
+                    }
+                }
                 ImGui::End();
             }
 
-            script.update(dt);  // gameplay decides first...
-            physics.update(dt); // ...then the world reacts
+            // Orbit camera — only when the UI isn't using the mouse.
+            if (!(ui && ui->wantCaptureMouse())) {
+                if (input.isMouseDown(forge::MouseButton::Right)) {
+                    camYaw += static_cast<float>(input.mouseDeltaX()) * 0.4f;
+                    camPitch = std::clamp(camPitch + static_cast<float>(input.mouseDeltaY()) * 0.4f,
+                                          -85.0f, 85.0f);
+                }
+                camDist =
+                    std::clamp(camDist * std::pow(0.92f, static_cast<float>(input.scrollDeltaY())),
+                               2.0f, 30.0f);
+            }
+
+            // Simulation control: pause freezes gameplay+physics; Step runs
+            // exactly one 60 Hz tick. Typing in the UI suppresses gameplay
+            // input (the script polls keys).
+            const bool typing = ui && ui->wantCaptureKeyboard();
+            if (!paused) {
+                if (!typing) {
+                    script.update(dt); // gameplay decides first...
+                }
+                physics.update(dt); // ...then the world reacts
+            } else if (stepOnce) {
+                stepOnce = false;
+                physics.update(1.0f / 60.0f);
+            }
 
             if (renderer && now - lastPoll > std::chrono::milliseconds(500)) {
                 lastPoll = now;
@@ -306,17 +435,28 @@ int main() {
             }
 
             if (renderer) {
-                std::vector<forge::DrawItem> items{
-                    forge::DrawItem{cubeMesh, forge::Renderer::defaultTexture(),
-                                    physics.bodyTransform(cubeBody)},
-                    forge::DrawItem{torusMesh, crateTexture, torusModel},
-                    forge::DrawItem{cubeMesh, forge::Renderer::defaultTexture(), groundOffset},
-                };
-                for (const ScriptedBox& box : scriptedBoxes) {
-                    items.push_back({cubeMesh, crateTexture,
-                                     physics.bodyTransform(box.body) *
-                                         glm::scale(glm::mat4(1.0f), box.halfExtents * 2.0f)});
-                }
+                const float yawR = glm::radians(camYaw);
+                const float pitchR = glm::radians(camPitch);
+                const forge::Camera camera{
+                    .position = camTarget + camDist * glm::vec3(std::sin(yawR) * std::cos(pitchR),
+                                                                std::sin(pitchR),
+                                                                std::cos(yawR) * std::cos(pitchR)),
+                    .target = camTarget};
+
+                // The frame's draw list, straight from the scene: physics
+                // owns dynamic transforms, TransformC owns everything else.
+                std::vector<forge::DrawItem> items;
+                scene.each<TransformC, MeshRendererC>([&](forge::ecs::Entity e, TransformC& t,
+                                                          MeshRendererC& mr) {
+                    glm::mat4 model;
+                    if (auto* body = scene.tryGet<BodyC>(e); body != nullptr && body->dynamic) {
+                        model =
+                            physics.bodyTransform(body->id) * glm::scale(glm::mat4(1.0f), t.scale);
+                    } else {
+                        model = trs(t);
+                    }
+                    items.push_back({mr.mesh, mr.texture, model});
+                });
                 renderer->drawFrame(camera, items);
             }
         }

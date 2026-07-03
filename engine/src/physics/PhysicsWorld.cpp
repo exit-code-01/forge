@@ -169,4 +169,14 @@ void PhysicsWorld::addLinearVelocity(BodyId id, const glm::vec3& velocity) {
         JPH::BodyID(id.value), JPH::Vec3(velocity.x, velocity.y, velocity.z));
 }
 
+void PhysicsWorld::teleport(BodyId id, const glm::vec3& position) {
+    JPH::BodyInterface& bodies = m_impl->system->GetBodyInterface();
+    const JPH::BodyID body(id.value);
+    bodies.SetPositionAndRotation(body, JPH::RVec3(position.x, position.y, position.z),
+                                  bodies.GetRotation(body), JPH::EActivation::Activate);
+    if (bodies.GetMotionType(body) == JPH::EMotionType::Dynamic) {
+        bodies.SetLinearAndAngularVelocity(body, JPH::Vec3::sZero(), JPH::Vec3::sZero());
+    }
+}
+
 } // namespace forge
