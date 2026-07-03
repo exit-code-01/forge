@@ -335,6 +335,8 @@ int main() {
             float pitch = 0.0f;
             forge::BodyId held{};
             bool holding = false;
+            bool wasGrounded = true;
+            float stepTimer = 0.0f;
         } player;
         bool playMode = true; // TAB toggles into the editor
         window.setCursorCaptured(true);
@@ -436,9 +438,27 @@ int main() {
                     move = glm::normalize(move);
                 }
                 const float speed = input.isKeyDown(forge::Key::LeftShift) ? 7.0f : 4.5f;
-                physics.moveCharacter(move * speed,
-                                      !paused && input.wasKeyPressed(forge::Key::Space),
-                                      paused ? 0.0f : dt);
+                const bool jumpNow = !paused && input.wasKeyPressed(forge::Key::Space);
+                if (jumpNow && physics.characterGrounded()) {
+                    audio.play("assets/sounds/jump.wav");
+                }
+                physics.moveCharacter(move * speed, jumpNow, paused ? 0.0f : dt);
+
+                // Landing + footsteps ride the grounded state's edges.
+                const bool grounded = physics.characterGrounded();
+                if (grounded && !player.wasGrounded) {
+                    audio.play("assets/sounds/land.wav");
+                }
+                player.wasGrounded = grounded;
+                if (grounded && move != glm::vec3(0.0f) && !paused) {
+                    player.stepTimer -= dt * (speed > 5.0f ? 1.5f : 1.0f);
+                    if (player.stepTimer <= 0.0f) {
+                        audio.play("assets/sounds/step.wav");
+                        player.stepTimer = 0.38f;
+                    }
+                } else {
+                    player.stepTimer = 0.12f; // first step lands quickly
+                }
 
                 const glm::vec3 eye = physics.characterPosition() + glm::vec3(0.0f, 0.65f, 0.0f);
                 camera.position = eye;
@@ -449,7 +469,7 @@ int main() {
                     if (player.holding) { // throw
                         physics.setLinearVelocity(player.held, look * 11.0f);
                         player.holding = false;
-                        audio.play("assets/sounds/kick.wav");
+                        audio.play("assets/sounds/throw.wav");
                         sparks.burst(eye + look * 1.2f, 12);
                     } else if (const auto hit = physics.raycast(eye, look, 3.5f)) {
                         const auto it = bodyToEntity.find(hit->value);
@@ -458,6 +478,7 @@ int main() {
                         if (bc != nullptr && bc->dynamic) {
                             player.held = *hit;
                             player.holding = true;
+                            audio.play("assets/sounds/grab.wav");
                             FORGE_INFO("glove: grabbed {}", scene.get<Name>(it->second).value);
                         } else {
                             FORGE_INFO("glove: hit body {} (not grabbable)", hit->value);
@@ -471,6 +492,7 @@ int main() {
                 if (player.holding && input.wasMousePressed(forge::MouseButton::Right)) {
                     physics.setLinearVelocity(player.held, {0.0f, 0.0f, 0.0f}); // gentle drop
                     player.holding = false;
+                    audio.play("assets/sounds/grab.wav"); // same blip, release direction
                 }
                 if (player.holding) {
                     // Velocity spring: mass-independent, fights gravity for

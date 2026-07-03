@@ -20,7 +20,7 @@ function onUpdate(dt)
             forge.physics.spawnBox(vec3(0.25, 0.25, 0.25), at, true, 0.4)
             forge.fx.burst(at, 8)
         end
-        forge.audio.play("assets/sounds/kick.wav", 0.6)
+        forge.audio.play("assets/sounds/kick.wav")
         spawnCount = spawnCount + 3
         forge.log("crate drop! total spawned: " .. spawnCount)
     end
