@@ -66,6 +66,11 @@ public:
     std::function<glm::vec3(const std::string& name)> onGetEntityPosition;
     std::function<void(const std::string& name, glm::vec3 scale)> onSetEntityScale;
     std::function<void(const std::string& name)> onDestroyEntity; // glass shatters
+    // Rooms are Lua data (week 3): scripts spawn NAMED, textured, collidable
+    // entities; the host owns meshes/textures/ECS. halfExtents 0 = no body.
+    std::function<void(const std::string& name, glm::vec3 position, glm::vec3 scale,
+                       glm::vec3 halfExtents, const std::string& texture, bool dynamic)>
+        onSpawnEntity;
     std::function<glm::vec3()> onPlayerPosition;
     // forge.scene.setPosition/getPosition(name), forge.player.position().
     void bindScene();

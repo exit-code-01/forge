@@ -144,6 +144,13 @@ void ScriptEngine::bindScene() {
             onDestroyEntity(name);
         }
     });
+    sceneTable.set_function("spawn", [this](const std::string& name, const glm::vec3& position,
+                                            const glm::vec3& scale, const glm::vec3& halfExtents,
+                                            const std::string& texture, bool dynamic) {
+        if (onSpawnEntity) {
+            onSpawnEntity(name, position, scale, halfExtents, texture, dynamic);
+        }
+    });
     sol::table playerTable = forge.create_named("player");
     playerTable.set_function(
         "position", [this]() { return onPlayerPosition ? onPlayerPosition() : glm::vec3(0.0f); });

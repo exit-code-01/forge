@@ -446,6 +446,18 @@ int main() {
             }
             scene.destroy(e);
         };
+        script.onSpawnEntity = [&](const std::string& name, glm::vec3 pos, glm::vec3 sc,
+                                   glm::vec3 half, const std::string& texture, bool dynamic) {
+            forge::TextureHandle tex = checker;
+            if (texture == "crate") {
+                tex = crateTexture;
+            } else if (texture == "laser") {
+                tex = laserTexture;
+            } else if (texture == "glass") {
+                tex = glassTexture;
+            }
+            spawnEntity(name, pos, sc, cubeMesh, tex, half, dynamic, 0.4f);
+        };
         script.onPlayerPosition = [&]() { return physics.characterPosition(); };
         script.bindScene();
         script.runFile("assets/scripts/scene.lua");
