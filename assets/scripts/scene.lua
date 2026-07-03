@@ -15,20 +15,23 @@ function onStart()
 end
 
 function onUpdate(dt)
-    -- The kick that used to be C++ in main.cpp, now one line of gameplay:
+    -- The kick that used to be C++ in main.cpp, now gameplay + FX + sound:
     if forge.input.pressed("space") then
         forge.physics.kick(cube, vec3(0.6, 6.0, 0.4))
         local p = forge.physics.position(cube)
+        forge.fx.burst(p, 24)
+        forge.audio.play("assets/sounds/kick.wav")
         forge.log(string.format("kicked cube at (%.1f, %.1f, %.1f)", p.x, p.y, p.z))
     end
 
-    -- E: rain three small boxes above the scene.
+    -- E: rain three small boxes above the scene, with dust puffs.
     if forge.input.pressed("e") then
         for i = 1, 3 do
-            forge.physics.spawnBox(vec3(0.25, 0.25, 0.25),
-                                   vec3((i - 2) * 0.9, 4.0 + i * 0.8, 0.6),
-                                   true, 0.5)
+            local at = vec3((i - 2) * 0.9, 4.0 + i * 0.8, 0.6)
+            forge.physics.spawnBox(vec3(0.25, 0.25, 0.25), at, true, 0.5)
+            forge.fx.burst(at, 8)
         end
+        forge.audio.play("assets/sounds/kick.wav", 0.6)
         spawnCount = spawnCount + 3
         forge.log("box rain! total spawned: " .. spawnCount)
     end

@@ -210,3 +210,16 @@ FetchContent_MakeAvailable(imguizmo)
 add_library(imguizmo_static STATIC ${imguizmo_SOURCE_DIR}/src/ImGuizmo.cpp)
 target_include_directories(imguizmo_static SYSTEM PUBLIC ${imguizmo_SOURCE_DIR}/src)
 target_link_libraries(imguizmo_static PUBLIC imgui_static)
+
+# ---- miniaudio 0.11.25 (P8) — consumed by: engine/src/audio/Audio.cpp
+# Single header; backends are dlopen'd at runtime, so no extra link libs and
+# no audio device required to BUILD (CI-safe, same philosophy as volk).
+FetchContent_Declare(miniaudio
+    GIT_REPOSITORY https://github.com/mackron/miniaudio.git
+    GIT_TAG        0.11.25
+    GIT_SHALLOW    TRUE
+    SOURCE_SUBDIR  cmake-subdir-intentionally-unused
+)
+FetchContent_MakeAvailable(miniaudio)
+add_library(miniaudio INTERFACE)
+target_include_directories(miniaudio SYSTEM INTERFACE ${miniaudio_SOURCE_DIR})

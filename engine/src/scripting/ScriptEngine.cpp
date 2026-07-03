@@ -1,6 +1,8 @@
 // engine/src/scripting/ScriptEngine.cpp — the ONLY TU that includes Lua/sol2.
 #include "forge/scripting/ScriptEngine.hpp"
+#include "forge/audio/Audio.hpp"
 #include "forge/core/Log.hpp"
+#include "forge/fx/Particles.hpp"
 #include "forge/physics/PhysicsWorld.hpp"
 #include "forge/platform/Input.hpp"
 
@@ -98,6 +100,21 @@ void ScriptEngine::bindInput(const Input& input) {
         }
         return input.wasKeyPressed(*key);
     });
+}
+
+void ScriptEngine::bindAudio(Audio& audio) {
+    sol::table forge = m_impl->lua["forge"];
+    sol::table aud = forge.create_named("audio");
+    aud.set_function("play", [&audio](const std::string& path, sol::optional<float> volume) {
+        audio.play(path, volume.value_or(1.0f));
+    });
+}
+
+void ScriptEngine::bindFx(fx::ParticleEmitter& emitter) {
+    sol::table forge = m_impl->lua["forge"];
+    sol::table fxTable = forge.create_named("fx");
+    fxTable.set_function(
+        "burst", [&emitter](const glm::vec3& origin, int count) { emitter.burst(origin, count); });
 }
 
 bool ScriptEngine::runFile(const std::string& path) {

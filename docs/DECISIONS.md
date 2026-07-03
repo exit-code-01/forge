@@ -341,3 +341,28 @@ and imgui.h must precede ImGuizmo.h — an include-sorting formatter will
 happily break that, hence the block separation. UI drawn under 125% DPI also
 exposed that our capture tooling was silently cropping: fixed by making it
 DPI-aware, closing the loop on the P3.1 "off-center cube" illusion for good.
+
+## ADR-020 — Lean P8: audio, particles, and keyframe animation sized to VAULT
+
+P8 ships deliberately lean, scoped by what the sample game actually consumes.
+AUDIO: miniaudio 0.11.25 behind `forge::Audio` (one TU, warning-shielded
+implementation — the stb/Assimp seam pattern). Backends are dlopen'd at
+runtime, so building needs no audio SDK and a device-less machine (CI) gets
+a disabled-but-valid engine: play() no-ops, nothing throws — volk's
+philosophy applied to sound. Engine-level volume is the only knob; a real
+mixer with per-voice control belongs to VAULT's week-5 audio pass.
+PARTICLES: CPU burst emitter (`fx::ParticleEmitter`, header-only), rendered
+as tiny mesh instances through the ordinary DrawItem path — a few hundred
+draws is nothing at this scale, and GPU instancing/billboards arrive when a
+profiler asks, not a feeling. Deterministic seed: same burst, same sparks,
+filmable twice. ANIMATION: keyframe TRANSFORM clips (`anim::Clip`, position
+tracks, lerp, looping) — doors, moving platforms, bobbing drones are VAULT's
+ENTIRE animation vocabulary, and this sampling layer is the foundation GPU
+skinning stands on later. SKINNED MESHES ARE EXPLICITLY DEFERRED: skinning
+is the single most expensive renderer feature to do right (per the game
+plan's own ranking), and a first-person game with no player character has
+nothing to skin until the art pass proves otherwise. The animated platform's
+collider follows via teleport; a proper KINEMATIC body type is the noted
+follow-up when platforms must push bodies rather than pass through edge
+cases. Lua reach: forge.audio.play and forge.fx.burst — sound and sparks
+are gameplay decisions (ADR-018), so scripts own them.

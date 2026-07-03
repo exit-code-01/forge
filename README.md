@@ -41,21 +41,21 @@ sudo apt install xorg-dev libwayland-dev libxkbcommon-dev wayland-protocols
 - **P5** Asset pipeline: model/texture import, hot reload — ✅ done
 - **P6** Scripting: Lua bindings — ✅ done
 - **P7** Editor: scene hierarchy, inspector, gizmos (Dear ImGui) — ✅ done
-- **P8** Animation (skeletal), particles, audio
+- **P8** Animation (keyframe; skinning deferred), particles, audio — ✅ done (lean, ADR-020)
 - **P9** Networking basics (optional)
 - **P10** Polish, docs, sample game, public release
 
 ## Status
 
-P7 complete — the engine has a face. Dear ImGui draws inside the Vulkan
-frame via `forge::EditorUi`; the scene is now real ECS entities
-(Name/Transform/MeshRenderer/Body), browsable in a hierarchy panel and
-editable in an inspector — positions drag-edit with colliders teleporting
-in sync, simulation pauses and single-steps, the camera orbits (RMB) and
-zooms (wheel), and selected entities get an ImGuizmo world-space translate
-gizmo. Script-spawned boxes appear in the hierarchy live. Zero validation
-complaints. Next: P8 — skeletal animation, particles, audio; then VAULT's
-rooms get built in this editor.
+P8 complete (lean, by decision — ADR-020): `forge::Audio` (miniaudio, no
+device required to build or run), CPU burst particles (`fx::ParticleEmitter`)
+rendered through the ordinary draw path, and keyframe transform animation
+(`anim::Clip`) driving a moving platform whose collider rides along. Lua
+scripts own sound and sparks: the kick now flashes and thumps. Skinned-mesh
+animation is explicitly deferred until VAULT's art pass proves it needs an
+organic character. Zero validation complaints. Next: P9 (networking) is
+optional — the realistic path is straight to VAULT week 1: character
+controller, pickup/throw, the first grey-box room.
 
 ## Vulkan SDK
 

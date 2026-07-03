@@ -18,6 +18,7 @@ add_library(forge_engine STATIC
     src/assets/ImageLoader.cpp
     src/scripting/ScriptEngine.cpp
     src/ui/EditorUi.cpp
+    src/audio/Audio.cpp
     src/renderer/VulkanContext.cpp
     src/renderer/VulkanDevice.cpp
     src/renderer/VulkanSwapchain.cpp
@@ -56,6 +57,7 @@ target_link_libraries(forge_engine
         lua_static      # scripting VM; confined to src/scripting (ADR-018)
         sol2            # C++ <-> Lua binding layer; same TU
         imgui_static    # UI lifecycle/backends; confined to src/ui (ADR-019)
+        miniaudio       # audio backend; confined to src/audio (ADR-020)
     PUBLIC
         glm::glm        # math types will appear in the public API
 )

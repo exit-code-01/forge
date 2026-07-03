@@ -4,9 +4,12 @@
 // OPTIONAL: no Vulkan means warn and keep running windowed.
 // Window must precede VulkanContext: the surface extensions come from GLFW.
 
+#include "forge/anim/Clip.hpp"
 #include "forge/assets/Assets.hpp"
+#include "forge/audio/Audio.hpp"
 #include "forge/ecs/Registry.hpp"
 #include "forge/forge.hpp"
+#include "forge/fx/Particles.hpp"
 #include "forge/physics/PhysicsWorld.hpp"
 #include "forge/platform/Window.hpp"
 #include "forge/renderer/Renderer.hpp"
@@ -286,11 +289,29 @@ int main() {
         const auto cubeEntity = spawnEntity("Cube", {0.0f, 3.0f, 0.0f}, {1.0f, 1.0f, 1.0f},
                                             cubeMesh, checker, {0.5f, 0.5f, 0.5f}, true, 0.4f);
 
+        // P8 (lean): audio + scripted spark bursts + a keyframe-animated
+        // platform. Skinned meshes are deferred by decision (ADR-020).
+        forge::Audio audio;
+        forge::fx::ParticleEmitter sparks;
+
+        const auto platformEntity =
+            spawnEntity("Platform", {2.2f, -0.4f, -1.5f}, {1.6f, 0.2f, 1.6f}, cubeMesh,
+                        crateTexture, {0.8f, 0.1f, 0.8f}, false);
+        forge::anim::Clip platformClip;
+        platformClip.positionKeys = {
+            {0.0f, {2.2f, -0.4f, -1.5f}},
+            {2.5f, {2.2f, 1.6f, -1.5f}},
+            {5.0f, {2.2f, -0.4f, -1.5f}},
+        };
+        float animTime = 0.0f;
+
         // Scripting: gameplay decisions move to Lua (ADR-018). Script-spawned
         // bodies become full scene entities — they show up in the hierarchy.
         forge::ScriptEngine script;
         script.bindPhysics(physics);
         script.bindInput(window.input());
+        script.bindAudio(audio);
+        script.bindFx(sparks);
         int scriptBoxCount = 0;
         script.onBoxSpawned = [&](forge::BodyId body, glm::vec3 halfExtents) {
             const auto e = scene.create();
@@ -460,6 +481,21 @@ int main() {
                 physics.update(1.0f / 60.0f);
             }
 
+            // Keyframe animation drives the platform; the collider rides
+            // along via teleport (a kinematic body is the proper follow-up,
+            // noted in ADR-020). Paused sim pauses animation too.
+            if (!paused || stepOnce) {
+                animTime += dt;
+            }
+            if (scene.alive(platformEntity)) {
+                auto& pt = scene.get<TransformC>(platformEntity);
+                pt.position = platformClip.samplePosition(animTime);
+                if (auto* pb = scene.tryGet<BodyC>(platformEntity)) {
+                    physics.teleport(pb->id, pt.position);
+                }
+            }
+            sparks.update(paused ? 0.0f : dt);
+
             if (renderer && now - lastPoll > std::chrono::milliseconds(500)) {
                 lastPoll = now;
                 crateWatch.poll([&](const std::string& path) {
@@ -492,6 +528,7 @@ int main() {
                     }
                     items.push_back({mr.mesh, mr.texture, model});
                 });
+                sparks.appendDrawItems(items, cubeMesh, crateTexture);
                 renderer->drawFrame(camera, items);
             }
         }

@@ -27,7 +27,12 @@ namespace forge {
 
 class PhysicsWorld;
 class Input;
+class Audio;
 struct BodyId;
+
+namespace fx {
+class ParticleEmitter;
+}
 
 class ScriptEngine {
 public:
@@ -46,6 +51,10 @@ public:
     void bindPhysics(PhysicsWorld& physics);
     // forge.input: pressed("space"|"e"|letters|digits) — edge-triggered.
     void bindInput(const Input& input);
+    // forge.audio: play(path, volume) — fire-and-forget.
+    void bindAudio(Audio& audio);
+    // forge.fx: burst(vec3, count) — scripted spark/dust bursts.
+    void bindFx(fx::ParticleEmitter& emitter);
 
     // Fired when a script spawns a body, so the host can register it for
     // drawing. Kept as a hook because rendering is the HOST's business.
