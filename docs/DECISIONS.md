@@ -452,3 +452,30 @@ crosshair flares amber when the glove's raycast lands on a grabbable body
 a motor thunk, and the key legend now lists Q/R. Looping-room designs for a
 possible week 8 are banked in docs/PUZZLE_IDEAS.md — five candidates, two
 picked, engine gaps per idea named up front.
+
+## ADR-024 — VAULT week 8: the loop pass is pure data (and a plate bugfix)
+
+Rooms 9 and 10 — the Relay Ring and the Atrium from docs/PUZZLE_IDEAS.md —
+shipped with ZERO C++ changes and no rebuild: the week-7 exe ran the new
+content off a scene.lua edit alone. That was the selection criterion paying
+out: every generic system (plates with parkId/holdTime, lasers, doors,
+glass, crates, checkpoints, lighting, hints) is data-driven, so new rooms
+are new TABLE ENTRIES plus geometry. Three small generalisations were the
+whole cost: doors2 entries take an optional x (side-facing cage gates sit
+off the room axis), lasers2 take an optional maxDist (the ring's beams span
+13.2 m; the old 9.2 was silently load-bearing), and glass panes carry their
+own respawn scale (Glass 10 faces sideways — the shared z-thin scale no
+longer fits all). R9 is the Relay Ring as a C-circuit: knee-high beams a
+grounded crate cuts, each gate held open by the beam BEHIND it — place,
+walk through, glove-pull the crate after you, and the gate closes at your
+heels. R10 is the Atrium: three alcove wings (drone-park cage, timed
+body-press cage, glass you spend a retrieved crate on), three hub plates,
+one exit. BUGFIX found by design review, not playtest: Jolt's
+CharacterVirtual is not a broadphase body, so physics.overlap NEVER saw the
+player — every "stand on the plate" beat (R4's sprint, R10's timed cage)
+was silently impossible. Fixed in Lua, not the engine: plates also test the
+player's position against their region (playerNear, tight 0.15 margin so
+the hub's plate row can't be double-pressed from between two plates).
+Verified live: standing on R1's plate now opens Door 1 with no crate.
+The finish line moved from z -104.4 to -138.4; checkpoints, the lighting
+ladder, and the hint ladder each grew two rungs to match.

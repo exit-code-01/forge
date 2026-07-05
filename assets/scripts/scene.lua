@@ -1,9 +1,11 @@
--- assets/scripts/scene.lua — VAULT: tutorial + rooms 1-8, all Lua data.
+-- assets/scripts/scene.lua — VAULT: tutorial + rooms 1-10, all Lua data.
 -- Hot-reloadable logic; GEOMETRY spawns once per run (restart to reshape).
 -- Layout runs NORTH (-z): tutorial | R1 carry | R2 laser-park | R3 throw |
 -- R4 timed plate sprint | R5 drone intro | R6 plate+drone-beam | R7 glass wall |
--- R8 finale (2 plates + beam) | end pad. Drone: Q parks/recalls (flies
--- ABOVE the open-top walls — steering, no navmesh, per the game plan).
+-- R8 (2 plates + beam) | R9 relay ring (week 8: gate closes behind you) |
+-- R10 atrium (week 8: three wings feed three plates) | end pad.
+-- Drone: Q parks/recalls (flies ABOVE the open-top walls — steering, no
+-- navmesh, per the game plan).
 
 -- ---- Tutorial wiring (bespoke; the rooms use the generic systems below) --
 local plate = {
@@ -32,7 +34,7 @@ local glass = {
     breakSpeed = 4.5,
     broken = false,
 }
-local winZ = -104.4 -- past room 8's exit
+local winZ = -138.4 -- past room 10's exit (week 8 moved the finish line)
 
 -- ---- Generic puzzle data: rooms 1-8 -------------------------------------
 local plates2 = { -- parkId: a parked drone counts as weight
@@ -48,15 +50,35 @@ local plates2 = { -- parkId: a parked drone counts as weight
     { id = "p7",  center = vec3(-3.5, 0.35, -88.0), half = vec3(0.7, 0.3, 0.7) },
     { id = "p8a", center = vec3(-3.0, 0.35, -99.0), half = vec3(0.7, 0.3, 0.7) },
     { id = "p8b", center = vec3(3.0, 0.35, -99.0),  half = vec3(0.7, 0.3, 0.7) },
+    -- R10 atrium (week 8): wing plates open the cages, the hub row opens the
+    -- exit. p10w wants sustained weight (drone or crate); p10e is a body-press
+    -- sprint; p10a/b/c want the three wing crates.
+    { id = "p10w", center = vec3(-5.5, 0.35, -123.5), half = vec3(0.7, 0.3, 0.7), parkId = "aw" },
+    { id = "p10e", center = vec3(6.0, 0.35, -124.0),  half = vec3(0.7, 0.3, 0.7), holdTime = 3.0 },
+    { id = "p10a", center = vec3(-2.0, 0.35, -132.0), half = vec3(0.7, 0.3, 0.7) },
+    { id = "p10b", center = vec3(0.0, 0.35, -132.0),  half = vec3(0.7, 0.3, 0.7) },
+    { id = "p10c", center = vec3(2.0, 0.35, -132.0),  half = vec3(0.7, 0.3, 0.7) },
 }
-local lasers2 = { -- parkId: a parked drone blocks the beam
+local lasers2 = { -- parkId: a parked drone blocks the beam; maxDist defaults 9.2
     { id = "l2", origin = vec3(-4.4, 1.1, -26.0), receiverX = 4.45, beam = "Beam 2" },
     { id = "l6", origin = vec3(-4.4, 1.1, -74.0), receiverX = 4.45, beam = "Beam 6", parkId = "b6" },
     { id = "l8", origin = vec3(-4.4, 1.1, -97.0), receiverX = 4.45, beam = "Beam 8", parkId = "b8" },
+    -- R9 relay ring (week 8): KNEE-HIGH beams — a grounded crate cuts them.
+    -- Cutting r1/r2 opens the ring gates; r3 opens the exit door.
+    { id = "r1", origin = vec3(-6.4, 0.35, -108.0), receiverX = 6.6,
+      beam = "Beam r1", maxDist = 13.5 },
+    { id = "r2", origin = vec3(-6.4, 0.35, -112.4), receiverX = -2.2,
+      beam = "Beam r2", maxDist = 4.6 },
+    { id = "r3", origin = vec3(-6.4, 0.35, -117.0), receiverX = 6.6,
+      beam = "Beam r3", maxDist = 13.5 },
 }
-local glasses2 = {
-    { name = "Glass 3", center = vec3(0, 1.05, -44.1), half = vec3(1.3, 1.2, 0.4) },
-    { name = "Glass 7", center = vec3(0, 1.05, -85.0), half = vec3(1.3, 1.2, 0.4) },
+local glasses2 = { -- scale/halfE: what resetGame re-spawns (Glass 10 is x-thin)
+    { name = "Glass 3", center = vec3(0, 1.05, -44.1), half = vec3(1.3, 1.2, 0.4),
+      scale = vec3(2.2, 2.1, 0.12), halfE = vec3(1.1, 1.05, 0.06) },
+    { name = "Glass 7", center = vec3(0, 1.05, -85.0), half = vec3(1.3, 1.2, 0.4),
+      scale = vec3(2.2, 2.1, 0.12), halfE = vec3(1.1, 1.05, 0.06) },
+    { name = "Glass 10", center = vec3(-4.0, 1.05, -135.4), half = vec3(0.4, 1.2, 1.3),
+      scale = vec3(0.12, 2.1, 2.2), halfE = vec3(0.06, 1.05, 1.1) },
 }
 -- Every throwable crate as DATA (name + spawn), so buildRooms spawns them and
 -- week-6 respawn/reset can return them home. Tutorial crates (A/B/C) are
@@ -73,6 +95,10 @@ local roomCrates = {
     { name = "Crate R7",  pos = vec3(-3.5, 0.4, -82.5) },
     { name = "Crate R8a", pos = vec3(-3.0, 0.4, -94.5) },
     { name = "Crate R8b", pos = vec3(3.0, 0.4, -94.5) },
+    { name = "Crate R9",   pos = vec3(4.0, 0.4, -107.0) },  -- ferried around the ring
+    { name = "Crate R10a", pos = vec3(-6.0, 0.4, -128.5) }, -- Wing W (drone cage)
+    { name = "Crate R10b", pos = vec3(6.0, 0.4, -130.5) },  -- Wing E (timed cage)
+    { name = "Crate R10c", pos = vec3(-6.0, 0.4, -135.4) }, -- Wing N (behind glass)
 }
 -- Checkpoints (week 6): the deepest reached room entrance. Player falls into a
 -- void (or presses R) -> respawn here. z is the near-wall the player crosses;
@@ -80,7 +106,8 @@ local roomCrates = {
 local startPos = vec3(0, 1.5, 5.0)
 local voidY = -8.0
 local checkpoints = { { z = 100.0, pos = startPos } }
-for _, nz in ipairs({ -9.4, -21.4, -33.4, -45.4, -57.4, -69.4, -81.4, -93.4 }) do
+for _, nz in ipairs({ -9.4, -21.4, -33.4, -45.4, -57.4, -69.4, -81.4, -93.4,
+                      -105.4, -121.4 }) do
     checkpoints[#checkpoints + 1] = { z = nz, pos = vec3(0, 1.5, nz - 1.6) }
 end
 local curCp = 1
@@ -97,9 +124,21 @@ local doors2 = {
     ["Door 7"] = { z = -91.4, cond = function() return plateOn("p7") end },
     ["Door 8"] = { z = -103.4,
                    cond = function() return plateOn("p8a") and plateOn("p8b") and beamCut("l8") end },
+    -- R9 relay ring (week 8): each gate is held open by the beam BEHIND it —
+    -- walk through, then glove-pull the crate through the open doorway.
+    ["Gate 9a"] = { x = -4.4, z = -110.4, cond = function() return beamCut("r1") end },
+    ["Gate 9b"] = { x = -4.4, z = -114.4, cond = function() return beamCut("r2") end },
+    ["Door 9"] = { z = -119.4, cond = function() return beamCut("r3") end },
+    -- R10 atrium (week 8): wing cages + the three-crate exit.
+    ["Cage W"] = { x = -4.0, z = -128.5, cond = function() return plateOn("p10w") end },
+    ["Cage E"] = { x = 4.0, z = -130.5, cond = function() return plateOn("p10e") end },
+    ["Door 10"] = { z = -137.4, cond = function()
+        return plateOn("p10a") and plateOn("p10b") and plateOn("p10c")
+    end },
 }
-for _, d in pairs(doors2) do
-    d.closed, d.open, d.speed, d.want = vec3(0, 1.25, d.z), vec3(0, 3.55, d.z), 2.2, false
+for _, d in pairs(doors2) do -- x: sideways-facing gates sit off the room axis
+    local dx = d.x or 0
+    d.closed, d.open, d.speed, d.want = vec3(dx, 1.25, d.z), vec3(dx, 3.55, d.z), 2.2, false
 end
 
 -- Drone: follows the player from above; Q parks it at the current room's
@@ -110,6 +149,7 @@ local drone = {
         p5 = { pos = vec3(3.5, 0.5, -63.0),  zMin = -67.4, zMax = -57.4 },
         b6 = { pos = vec3(0.0, 1.1, -74.0),  zMin = -79.4, zMax = -69.4 },
         b8 = { pos = vec3(0.0, 1.1, -97.0),  zMin = -103.4, zMax = -93.4 },
+        aw = { pos = vec3(-5.5, 1.0, -123.5), zMin = -137.4, zMax = -121.4 }, -- R10 Wing W
     },
 }
 
@@ -126,9 +166,11 @@ local function shell(id, z0, z1, w) -- floor + side walls (z0 > z1)
     box(id .. " Wall E", vec3(w * 0.5, 1.6, cz), vec3(0.4, 3.6, L), "concrete", true)
 end
 
-local function framedWall(id, z) -- full wall with a 2.2m doorway gap
-    box(id .. " W", vec3(-3.05, 1.6, z), vec3(3.9, 3.6, 0.4), "concrete", true)
-    box(id .. " E", vec3(3.05, 1.6, z), vec3(3.9, 3.6, 0.4), "concrete", true)
+local function framedWall(id, z, w) -- full wall with a 2.2m doorway gap
+    local seg = ((w or 10) - 2.2) * 0.5 -- w=10 -> the original 3.9m segments
+    local cx = 1.1 + seg * 0.5
+    box(id .. " W", vec3(-cx, 1.6, z), vec3(seg, 3.6, 0.4), "concrete", true)
+    box(id .. " E", vec3(cx, 1.6, z), vec3(seg, 3.6, 0.4), "concrete", true)
     box(id .. " Top", vec3(0, 3.0, z), vec3(2.2, 0.8, 0.4), "concrete", true)
 end
 
@@ -142,6 +184,65 @@ local function laserRig(n, z)
     box("Emitter " .. n, vec3(-4.6, 1.1, z), vec3(0.3, 0.3, 0.3), "laser", true)
     box("Receiver " .. n, vec3(4.6, 1.1, z), vec3(0.3, 0.3, 0.3), "laser", true)
     box("Beam " .. n, vec3(0, 1.1, z), vec3(8.8, 0.05, 0.05), "laser", false)
+end
+
+-- R9 Relay Ring (week 8, from docs/PUZZLE_IDEAS.md): a C-shaped circuit
+-- around a solid centre block. Knee-high beams; a grounded crate cuts one.
+-- Each gate is held open by the beam BEHIND it — place the crate, walk
+-- through, glove-pull the crate through the open doorway, repeat. The gate
+-- closing at your heels IS the loop.
+local function buildRelayRing()
+    shell("R9", -105.4, -119.4, 14)
+    framedWall("R9 NearWall", -105.4, 14)
+    framedWall("R9 FarWall", -119.4, 14)
+    box("Door 9", vec3(0, 1.25, -119.4), vec3(2.2, 2.5, 0.32), "metal", true)
+    -- centre block seals the east side: the path is S lane -> W lane -> N lane
+    box("R9 Block", vec3(2.4, 1.6, -112.4), vec3(8.8, 3.6, 4.0), "concrete", true)
+    for gi, gz in ipairs({ -110.4, -114.4 }) do -- gated dividers across the W lane
+        local id = "R9 Div" .. gi
+        box(id .. " W", vec3(-6.0, 1.6, gz), vec3(1.6, 3.6, 0.4), "concrete", true)
+        box(id .. " E", vec3(-2.8, 1.6, gz), vec3(1.6, 3.6, 0.4), "concrete", true)
+        box(id .. " Top", vec3(-4.4, 3.0, gz), vec3(1.6, 0.8, 0.4), "concrete", true)
+        box("Gate 9" .. (gi == 1 and "a" or "b"), vec3(-4.4, 1.25, gz), vec3(1.6, 2.5, 0.32),
+            "metal", true)
+    end
+    for _, r in ipairs({ { "r1", -108.0, 6.6 }, { "r2", -112.4, -2.2 }, { "r3", -117.0, 6.6 } }) do
+        box("Emitter " .. r[1], vec3(-6.6, 0.35, r[2]), vec3(0.3, 0.3, 0.3), "laser", true)
+        box("Receiver " .. r[1], vec3(r[3], 0.35, r[2]), vec3(0.3, 0.3, 0.3), "laser", true)
+        box("Beam " .. r[1], vec3(0, 0.35, r[2]), vec3(1.0, 0.05, 0.05), "laser", false)
+    end
+    corridor("Cor9", -119.4)
+end
+
+-- R10 Atrium (week 8): a 16m hub with three wings, each holding one crate
+-- behind a different lock (drone-park plate / timed body-press / glass you
+-- spend a retrieved crate on). Three hub plates + three crates = exit. The
+-- player keeps RETURNING to a hub that has visibly changed.
+local function buildAtrium()
+    shell("R10", -121.4, -137.4, 16)
+    framedWall("R10 NearWall", -121.4, 16)
+    framedWall("R10 FarWall", -137.4, 16)
+    box("Door 10", vec3(0, 1.25, -137.4), vec3(2.2, 2.5, 0.32), "metal", true)
+    -- Wing W (x -8..-4): cage opened by sustained weight on p10w (drone/crate)
+    box("Wing W N", vec3(-6, 1.6, -131.0), vec3(4, 3.6, 0.4), "concrete", true)
+    box("Wing W S", vec3(-6, 1.6, -126.0), vec3(4, 3.6, 0.4), "concrete", true)
+    box("Wing W E1", vec3(-4, 1.6, -130.15), vec3(0.4, 3.6, 1.7), "concrete", true)
+    box("Wing W E2", vec3(-4, 1.6, -126.85), vec3(0.4, 3.6, 1.7), "concrete", true)
+    box("Wing W Top", vec3(-4, 3.0, -128.5), vec3(0.4, 0.8, 1.6), "concrete", true)
+    box("Cage W", vec3(-4, 1.25, -128.5), vec3(0.32, 2.5, 1.6), "metal", true)
+    -- Wing E (x 4..8): timed cage — body-press p10e and sprint
+    box("Wing E N", vec3(6, 1.6, -133.0), vec3(4, 3.6, 0.4), "concrete", true)
+    box("Wing E S", vec3(6, 1.6, -128.0), vec3(4, 3.6, 0.4), "concrete", true)
+    box("Wing E W1", vec3(4, 1.6, -132.15), vec3(0.4, 3.6, 1.7), "concrete", true)
+    box("Wing E W2", vec3(4, 1.6, -128.85), vec3(0.4, 3.6, 1.7), "concrete", true)
+    box("Wing E Top", vec3(4, 3.0, -130.5), vec3(0.4, 0.8, 1.6), "concrete", true)
+    box("Cage E", vec3(4, 1.25, -130.5), vec3(0.32, 2.5, 1.6), "metal", true)
+    -- Wing N (NW corner): crate behind an x-thin glass window
+    box("Wing N S", vec3(-6, 1.6, -133.4), vec3(4, 3.6, 0.4), "concrete", true)
+    box("Wing N E1", vec3(-4, 1.6, -136.95), vec3(0.4, 3.6, 0.9), "concrete", true)
+    box("Wing N E2", vec3(-4, 1.6, -133.85), vec3(0.4, 3.6, 0.9), "concrete", true)
+    box("Wing N Top", vec3(-4, 2.75, -135.4), vec3(0.4, 1.3, 2.2), "concrete", true)
+    box("Glass 10", vec3(-4, 1.05, -135.4), vec3(0.12, 2.1, 2.2), "glass", true)
 end
 
 local function buildRooms()
@@ -158,7 +259,7 @@ local function buildRooms()
         -- 0.32 thick vs the 0.4 frame: recessed 4 cm so an OPEN door's faces
         -- never sit coplanar with the frame's top piece (z-fighting fix).
         box("Door " .. i, vec3(0, 1.25, z0 - 10), vec3(2.2, 2.5, 0.32), "metal", true)
-        if i < 8 then corridor("Cor" .. i, z0 - 10) end
+        corridor("Cor" .. i, z0 - 10) -- Cor8 now leads on to R9 (week 8)
     end
     -- plates (visual slabs; logic reads the plates2 regions)
     for _, pl in ipairs(plates2) do
@@ -181,14 +282,17 @@ local function buildRooms()
             box(c.name, c.pos, vec3(0.5, 0.5, 0.5), "crate", true, true)
         end
     end
-    -- end section (sealed: pad, side walls, cap)
-    box("End Pad", vec3(0, -0.2, -104.9), vec3(3.0, 0.4, 3.0), "floor", true)
-    box("End Wall W", vec3(-1.3, 1.6, -104.9), vec3(0.4, 3.6, 3.0), "concrete", true)
-    box("End Wall E", vec3(1.3, 1.6, -104.9), vec3(0.4, 3.6, 3.0), "concrete", true)
-    box("End Cap", vec3(0, 1.6, -106.5), vec3(3.0, 3.6, 0.4), "concrete", true)
+    -- week 8 looping rooms, then the end section moves past Door 10
+    buildRelayRing()
+    buildAtrium()
+    corridor("Cor10", -137.4)
+    box("End Pad", vec3(0, -0.2, -140.9), vec3(3.0, 0.4, 3.0), "floor", true)
+    box("End Wall W", vec3(-1.3, 1.6, -140.9), vec3(0.4, 3.6, 3.0), "concrete", true)
+    box("End Wall E", vec3(1.3, 1.6, -140.9), vec3(0.4, 3.6, 3.0), "concrete", true)
+    box("End Cap", vec3(0, 1.6, -142.5), vec3(3.0, 3.6, 0.4), "concrete", true)
     -- the companion drone (visual entity; pure Lua steering)
     box("Drone", vec3(1.0, 2.4, 3.0), vec3(0.4, 0.25, 0.4), "glass", false)
-    forge.log("rooms 1-8 built (near walls + flush corridors: map sealed)")
+    forge.log("rooms 1-10 built (relay ring + atrium: the loop pass)")
 end
 
 -- ---------------------------------------------------------------------------
@@ -212,7 +316,9 @@ end
 -- intensity; default warm facility key is (3.0, 2.9, 2.7)). Read most-negative
 -- first since the layout runs north (-z).
 local function roomLight(z)
-    if z <= -104.4 then return vec3(2.6, 3.4, 2.6)      -- end pad: success glow
+    if z <= -138.4 then return vec3(2.6, 3.4, 2.6)      -- end pad: success glow
+    elseif z <= -121.4 then return vec3(2.9, 2.6, 3.3)  -- R10 atrium: violet calm
+    elseif z <= -105.4 then return vec3(3.4, 2.5, 2.1)  -- R9 relay: alarm amber-red
     elseif z <= -93.4 then return vec3(3.7, 3.0, 2.1)   -- R8 finale: hot amber
     elseif z <= -81.4 then return vec3(2.0, 2.3, 2.9)   -- R7 glass: tense dim blue
     elseif z <= -69.4 then return vec3(2.4, 3.0, 3.0)   -- R6 plate+beam: teal
@@ -229,7 +335,9 @@ local curLight = vec3(3.0, 2.9, 2.7)
 -- Objective hints (week 7 QoL): one line per room, host draws it top-centre.
 -- Same most-negative-first z ladder as roomLight.
 local function roomHint(z)
-    if z <= -104.4 then return "VAULT cleared. Head for the light."
+    if z <= -138.4 then return "VAULT cleared. Head for the light."
+    elseif z <= -121.4 then return "R10: three wings, three crates, three plates"
+    elseif z <= -105.4 then return "R9: the beam holds the gate - pull the crate through behind you"
     elseif z <= -93.4 then return "R8: two plates AND the beam - everything you know"
     elseif z <= -81.4 then return "R7: the plate is behind glass; crates break glass"
     elseif z <= -69.4 then return "R6: plate + beam - the drone (Q) can hold one"
@@ -251,6 +359,17 @@ local function moveTowards(from, to, maxStep)
     end
     local k = maxStep / len
     return vec3(from.x + d.x * k, from.y + d.y * k, from.z + d.z * k)
+end
+
+-- Player-as-weight (week 8 bugfix): the CHARACTER is not a broadphase body,
+-- so physics.overlap never saw it — "stand on the plate" (R4, R10) silently
+-- never worked. Plates now also test the player's position against the
+-- region directly. Tight margin (0.15) so the hub's plate ROW can't be
+-- double-pressed by standing between two plates.
+local function playerNear(center, half, p)
+    return math.abs(p.x - center.x) <= half.x + 0.15
+       and math.abs(p.z - center.z) <= half.z + 0.15
+       and p.y > center.y - 0.5 and p.y < center.y + 1.7
 end
 
 -- Pressure-plate sink (week 7): the DETECTION region is fixed in space, so
@@ -354,11 +473,11 @@ function resetGame()
     plate.pressed = false
     laser.blocked = false
     curHint = nil -- re-push the hint on the first frame back
-    -- Re-spawn shattered panes (all glass shares one visual scale).
+    -- Re-spawn shattered panes (each pane knows its own scale — Glass 10
+    -- faces sideways, so the old shared z-thin scale no longer fits all).
     for _, gl in ipairs(glasses2) do
         if gl.broken then
-            forge.scene.spawn(gl.name, gl.center, vec3(2.2, 2.1, 0.12),
-                              vec3(1.1, 1.05, 0.06), "glass", false)
+            forge.scene.spawn(gl.name, gl.center, gl.scale, gl.halfE, "glass", false)
             gl.broken = false
         end
     end
@@ -394,6 +513,7 @@ function onUpdate(dt)
 
     -- ---- Tutorial (bespoke) ----
     local pressedNow = #forge.physics.overlap(plate.center, plate.half) > 0
+                       or playerNear(plate.center, plate.half, pp)
     if pressedNow ~= plate.pressed then
         plate.pressed = pressedNow
         forge.audio.play(pressedNow and "assets/sounds/land.wav" or "assets/sounds/grab.wav")
@@ -441,6 +561,7 @@ function onUpdate(dt)
     for _, pl in ipairs(plates2) do
         local raw = #forge.physics.overlap(pl.center, pl.half) > 0
                     or (pl.parkId ~= nil and droneAt(pl.parkId))
+                    or playerNear(pl.center, pl.half, pp)
         local now = raw
         -- Timed plates (week 7): the signal HOLDS for holdTime seconds after
         -- the weight leaves — press with your body, then sprint the door.
@@ -461,8 +582,9 @@ function onUpdate(dt)
         end
     end
     for _, lz in ipairs(lasers2) do
-        local _, hd = forge.physics.raycast(lz.origin, vec3(1, 0, 0), 9.2)
-        local d2 = hd or 9.2
+        local range = lz.maxDist or 9.2
+        local _, hd = forge.physics.raycast(lz.origin, vec3(1, 0, 0), range)
+        local d2 = hd or range
         local cut = d2 < (lz.receiverX - lz.origin.x) - 0.3
                     or (lz.parkId ~= nil and droneAt(lz.parkId))
         forge.scene.setPosition(lz.beam, vec3(lz.origin.x + d2 * 0.5, lz.origin.y, lz.origin.z))

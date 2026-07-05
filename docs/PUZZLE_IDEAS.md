@@ -55,3 +55,17 @@ Pick TWO: the Atrium Loop (structural novelty, zero engine risk) and the
 Relay Ring (mechanical novelty, zero engine risk). The Carousel waits for the
 kinematic body; One-Way Drops slot into either as a garnish; Figure-8 is the
 spare if a pick underperforms in grey-box.
+
+## Built (week 8)
+- **Relay Ring -> R9**, as a C-shaped variant: the east side is a solid
+  block, so the "ring" is S lane -> W lane -> N lane around it. Knee-high
+  (y 0.35) beams so a GROUNDED crate cuts them; each gate is held open by
+  the beam behind it — place the crate, walk through, glove-pull the crate
+  through the open doorway. The gate closing at your heels is the loop.
+  Full four-relay ring reserved for an art-pass remix.
+- **Atrium Loop -> R10**, as a 16 m hub with three alcove wings (drone-park
+  cage / timed body-press cage / glass you spend a retrieved crate on) and a
+  three-plate exit row. Wings return crates to the hub by hand rather than
+  drop chutes — the chute garnish joins when a vertical room exists.
+Still banked: Carousel (waits on the kinematic platform body), One-Way
+Drops, Figure-8.
