@@ -154,6 +154,21 @@ void ScriptEngine::bindScene() {
     sol::table playerTable = forge.create_named("player");
     playerTable.set_function(
         "position", [this]() { return onPlayerPosition ? onPlayerPosition() : glm::vec3(0.0f); });
+    // forge.player.teleport(pos): respawn/checkpoint warp (week 6).
+    playerTable.set_function("teleport", [this](const glm::vec3& position) {
+        if (onSetPlayerPosition) {
+            onSetPlayerPosition(position);
+        }
+    });
+
+    // forge.game.win(): the script signals the run is complete; the host
+    // raises the win screen (week 6). Game/menu state is the HOST's business.
+    sol::table gameTable = forge.create_named("game");
+    gameTable.set_function("win", [this]() {
+        if (onWin) {
+            onWin();
+        }
+    });
 
     // forge.render.set_light(color[, dir]): per-room mood. dir defaults to the
     // zero vector -> host keeps its current key-light direction.

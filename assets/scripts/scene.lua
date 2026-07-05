@@ -55,6 +55,33 @@ local glasses2 = {
     { name = "Glass 3", center = vec3(0, 1.05, -44.1), half = vec3(1.3, 1.2, 0.4) },
     { name = "Glass 7", center = vec3(0, 1.05, -85.0), half = vec3(1.3, 1.2, 0.4) },
 }
+-- Every throwable crate as DATA (name + spawn), so buildRooms spawns them and
+-- week-6 respawn/reset can return them home. Tutorial crates (A/B/C) are
+-- spawned by the host but are name-addressable, so they respawn too.
+local roomCrates = {
+    { name = "Crate A",   pos = vec3(0.0, 0.4, 2.5) },
+    { name = "Crate B",   pos = vec3(-1.2, 0.4, 1.2) },
+    { name = "Crate C",   pos = vec3(1.3, 0.4, 0.8) },
+    { name = "Crate R1",  pos = vec3(-3.5, 0.4, -17.0) },
+    { name = "Crate R2",  pos = vec3(-3.5, 0.4, -23.5) },
+    { name = "Crate R3",  pos = vec3(3.5, 0.4, -35.0) },
+    { name = "Crate R4a", pos = vec3(-3.0, 0.4, -46.5) },
+    { name = "Crate R4b", pos = vec3(3.0, 0.4, -46.5) },
+    { name = "Crate R6",  pos = vec3(3.5, 0.4, -71.0) },
+    { name = "Crate R7",  pos = vec3(-3.5, 0.4, -82.5) },
+    { name = "Crate R8a", pos = vec3(-3.0, 0.4, -94.5) },
+    { name = "Crate R8b", pos = vec3(3.0, 0.4, -94.5) },
+}
+-- Checkpoints (week 6): the deepest reached room entrance. Player falls into a
+-- void (or presses R) -> respawn here. z is the near-wall the player crosses;
+-- pos is a safe drop just inside on solid floor. Start is always index 1.
+local startPos = vec3(0, 1.5, 5.0)
+local voidY = -8.0
+local checkpoints = { { z = 100.0, pos = startPos } }
+for _, nz in ipairs({ -9.4, -21.4, -33.4, -45.4, -57.4, -69.4, -81.4, -93.4 }) do
+    checkpoints[#checkpoints + 1] = { z = nz, pos = vec3(0, 1.5, nz - 1.6) }
+end
+local curCp = 1
 local state = { plates = {}, lasers = {} } -- id -> pressed/blocked
 local function plateOn(id) return state.plates[id] == true end
 local function beamCut(id) return state.lasers[id] == true end
@@ -109,10 +136,6 @@ local function corridor(id, z0) -- 2m long, walls FLUSH with the 2.2m frames
     box(id .. " Wall E", vec3(1.3, 1.6, z0 - 1.0), vec3(0.4, 3.6, 2.0), "concrete", true)
 end
 
-local function crate(name, x, z)
-    box(name, vec3(x, 0.4, z), vec3(0.5, 0.5, 0.5), "crate", true, true)
-end
-
 local function laserRig(n, z)
     box("Emitter " .. n, vec3(-4.6, 1.1, z), vec3(0.3, 0.3, 0.3), "laser", true)
     box("Receiver " .. n, vec3(4.6, 1.1, z), vec3(0.3, 0.3, 0.3), "laser", true)
@@ -138,24 +161,22 @@ local function buildRooms()
         box("Plate " .. pl.id, vec3(pl.center.x, 0.1, pl.center.z), vec3(1.4, 0.2, 1.4),
             "metal", true)
     end
-    -- room contents
-    crate("Crate R1", -3.5, -17.0)
+    -- room contents (fixtures here; crates spawn from roomCrates below)
     laserRig(2, -26.0)
     box("Pedestal 2", vec3(0, 0.5, -26.0), vec3(1.0, 1.0, 1.0), "metal", true)
-    crate("Crate R2", -3.5, -23.5)
-    crate("Crate R3", 3.5, -35.0)
     box("Glass 3", vec3(0, 1.05, -44.1), vec3(2.2, 2.1, 0.12), "glass", true)
-    crate("Crate R4a", -3.0, -46.5)
-    crate("Crate R4b", 3.0, -46.5)
     laserRig(6, -74.0)
-    crate("Crate R6", 3.5, -71.0)
     -- R7: glass wall mid-room (framed, pane fills the gap)
     framedWall("R7 MidWall", -85.0)
     box("Glass 7", vec3(0, 1.05, -85.0), vec3(2.2, 2.1, 0.12), "glass", true)
-    crate("Crate R7", -3.5, -82.5)
     laserRig(8, -97.0)
-    crate("Crate R8a", -3.0, -94.5)
-    crate("Crate R8b", 3.0, -94.5)
+    -- throwable crates from the shared data table (skip the host-spawned
+    -- tutorial crates A/B/C — the room ids start at R).
+    for _, c in ipairs(roomCrates) do
+        if c.name:sub(1, 7) == "Crate R" then
+            box(c.name, c.pos, vec3(0.5, 0.5, 0.5), "crate", true, true)
+        end
+    end
     -- end section (sealed: pad, side walls, cap)
     box("End Pad", vec3(0, -0.2, -104.9), vec3(3.0, 0.4, 3.0), "floor", true)
     box("End Wall W", vec3(-1.3, 1.6, -104.9), vec3(0.4, 3.6, 3.0), "concrete", true)
@@ -253,10 +274,72 @@ local function droneAt(parkId)
     return dx * dx + dy * dy + dz * dz < 0.09 -- actually arrived
 end
 
+-- ---- Checkpoints + void recovery (week 6) --------------------------------
+local function respawnPlayer()
+    forge.player.teleport(checkpoints[curCp].pos)
+    forge.audio.play("assets/sounds/land.wav")
+    forge.log("respawn at checkpoint " .. curCp)
+end
+
+local function updateRespawn(p)
+    -- Advance the checkpoint as the player crosses each room's near wall.
+    while curCp < #checkpoints and p.z <= checkpoints[curCp + 1].z do
+        curCp = curCp + 1
+        forge.log("checkpoint reached (" .. curCp .. ")")
+    end
+    -- Player fell into a void, or asked for a manual respawn (R).
+    if p.y < voidY or forge.input.pressed("r") then
+        respawnPlayer()
+    end
+    -- Crates that fell out come home (closes the corridor-void loss bug).
+    for _, c in ipairs(roomCrates) do
+        if forge.scene.getPosition(c.name).y < voidY then
+            forge.scene.setPosition(c.name, c.pos)
+        end
+    end
+end
+
+-- Full restart (week 6): the host calls this from the menu's Restart. A soft
+-- reset — no scene rebuild — that returns every mutable thing to its start:
+-- player, crates, puzzle latches, drone, and re-spawns any shattered glass.
+function resetGame()
+    forge.player.teleport(startPos)
+    curCp = 1
+    won = false
+    for _, c in ipairs(roomCrates) do
+        forge.scene.setPosition(c.name, c.pos)
+    end
+    state.plates = {}
+    state.lasers = {}
+    for _, d in pairs(doors2) do d.want = false end
+    drone.parkedAt = nil
+    plate.pressed = false
+    laser.blocked = false
+    -- Re-spawn shattered panes (all glass shares one visual scale).
+    for _, gl in ipairs(glasses2) do
+        if gl.broken then
+            forge.scene.spawn(gl.name, gl.center, vec3(2.2, 2.1, 0.12),
+                              vec3(1.1, 1.05, 0.06), "glass", false)
+            gl.broken = false
+        end
+    end
+    if glass.broken then
+        forge.scene.spawn(glass.name, glass.center, vec3(2.2, 2.1, 0.12),
+                          vec3(1.1, 1.05, 0.06), "glass", false)
+        glass.broken = false
+    end
+    forge.log("*** game reset ***")
+end
+
 function onUpdate(dt)
+    local pp = forge.player.position()
+
+    -- ---- Checkpoints + void recovery (respawn player and lost crates) ----
+    updateRespawn(pp)
+
     -- ---- Per-room lighting: ease the key light toward this room's mood so
     -- crossing a doorway fades colour over ~0.4 s instead of snapping. ----
-    local tgt = roomLight(forge.player.position().z)
+    local tgt = roomLight(pp.z)
     local k = math.min(dt * 2.5, 1.0)
     curLight = vec3(curLight.x + (tgt.x - curLight.x) * k,
                     curLight.y + (tgt.y - curLight.y) * k,
@@ -365,6 +448,7 @@ function onUpdate(dt)
             forge.audio.play("assets/sounds/kick.wav")
             forge.fx.burst(vec3(p.x, p.y + 0.5, p.z), 30)
             forge.log("*** VAULT RUN COMPLETE: all 8 rooms ***")
+            forge.game.win() -- raise the win screen (host owns the menu)
         end
     end
 

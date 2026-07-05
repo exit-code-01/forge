@@ -383,7 +383,18 @@ int main() {
             float stepTimer = 0.0f;
         } player;
         bool playMode = true; // TAB toggles into the editor
-        window.setCursorCaptured(true);
+
+        // ---- Game state (week 6): a tiny menu FSM layered over play mode.
+        // Title on launch; Esc pauses; the script signals Won. Gameplay sim
+        // only advances in Playing — the other states freeze the world behind
+        // the menu. The editor (TAB) is orthogonal: it's a dev tool, not a
+        // game state, and keeps its own Esc = quit.
+        enum class GameState { Title, Playing, Paused, Won };
+        GameState gameState = GameState::Title;
+        const auto cursorForState = [&]() {
+            window.setCursorCaptured(playMode && gameState == GameState::Playing);
+        };
+        cursorForState(); // start on the title screen: cursor free
 
         // Scripting: gameplay decisions move to Lua (ADR-018). Script-spawned
         // bodies become full scene entities — they show up in the hierarchy.
@@ -491,6 +502,18 @@ int main() {
         script.onSetLighting = [&](glm::vec3 color, glm::vec3 dir) {
             renderer->setLighting(color, dir);
         };
+        // Respawn/checkpoint (week 6): the script warps the player; the host
+        // owns the character controller (zeroes velocity on the teleport).
+        script.onSetPlayerPosition = [&](glm::vec3 p) {
+            physics.setCharacterPosition(p);
+            player.holding = false; // a warp drops whatever you were carrying
+        };
+        // Run complete (week 6): the script fires this once the finale clears.
+        // The host raises the win screen and frees the cursor for the menu.
+        script.onWin = [&]() {
+            gameState = GameState::Won;
+            cursorForState();
+        };
         script.bindScene();
         script.runFile("assets/scripts/scene.lua");
 
@@ -514,14 +537,40 @@ int main() {
         auto& input = window.input();
         while (!window.shouldClose()) {
             window.pollEvents();
+            // ---- Menu FSM input. In the editor (TAB), Esc keeps its old
+            // meaning: quit. In play mode, Esc drives the menu: Title/Won ->
+            // quit, Playing <-> Paused. Enter starts a run from Title/Won.
             if (input.wasKeyPressed(forge::Key::Escape)) {
-                window.requestClose();
+                if (!playMode) {
+                    window.requestClose();
+                } else if (gameState == GameState::Playing) {
+                    gameState = GameState::Paused;
+                    cursorForState();
+                } else if (gameState == GameState::Paused) {
+                    gameState = GameState::Playing;
+                    cursorForState();
+                } else { // Title or Won
+                    window.requestClose();
+                }
+            }
+            if (playMode && input.wasKeyPressed(forge::Key::Enter) &&
+                (gameState == GameState::Title || gameState == GameState::Won)) {
+                if (gameState == GameState::Won) {
+                    script.runString("resetGame()"); // soft restart the run
+                }
+                gameState = GameState::Playing;
+                cursorForState();
             }
             if (input.wasKeyPressed(forge::Key::Tab)) {
                 playMode = !playMode;
-                window.setCursorCaptured(playMode);
                 player.holding = false; // no stale grabs across mode switches
+                cursorForState();       // editor frees the cursor; play recaptures
             }
+
+            // Gameplay simulation runs only while actually playing. In the
+            // editor, the old Pause checkbox still governs; the menu states
+            // (Title/Paused/Won) freeze the world behind the overlay.
+            const bool simRun = playMode ? (gameState == GameState::Playing && !paused) : !paused;
 
             const auto now = std::chrono::steady_clock::now();
             const float dt = std::chrono::duration<float>(now - lastTime).count();
@@ -530,9 +579,15 @@ int main() {
             forge::Camera camera{};
             if (playMode) {
                 // ---- First-person: mouse-look + WASD through the capsule.
-                player.yaw += static_cast<float>(input.mouseDeltaX()) * 0.14f;
-                player.pitch = std::clamp(
-                    player.pitch - static_cast<float>(input.mouseDeltaY()) * 0.14f, -89.0f, 89.0f);
+                // Mouse-look only while actually playing — a frozen menu must
+                // not swing the camera. The look vector is still computed each
+                // frame so the frozen scene renders from the right pose.
+                if (simRun) {
+                    player.yaw += static_cast<float>(input.mouseDeltaX()) * 0.14f;
+                    player.pitch =
+                        std::clamp(player.pitch - static_cast<float>(input.mouseDeltaY()) * 0.14f,
+                                   -89.0f, 89.0f);
+                }
                 const float py = glm::radians(player.yaw);
                 const float pp = glm::radians(player.pitch);
                 const glm::vec3 look{std::cos(pp) * std::sin(py), std::sin(pp),
@@ -540,43 +595,47 @@ int main() {
                 const glm::vec3 forward{std::sin(py), 0.0f, -std::cos(py)};
                 const glm::vec3 right{std::cos(py), 0.0f, std::sin(py)};
 
-                glm::vec3 move{0.0f};
-                if (input.isKeyDown(forge::Key::W)) {
-                    move += forward;
-                }
-                if (input.isKeyDown(forge::Key::S)) {
-                    move -= forward;
-                }
-                if (input.isKeyDown(forge::Key::D)) {
-                    move += right;
-                }
-                if (input.isKeyDown(forge::Key::A)) {
-                    move -= right;
-                }
-                if (move != glm::vec3(0.0f)) {
-                    move = glm::normalize(move);
-                }
-                const float speed = input.isKeyDown(forge::Key::LeftShift) ? 7.0f : 4.5f;
-                const bool jumpNow = !paused && input.wasKeyPressed(forge::Key::Space);
-                if (jumpNow && physics.characterGrounded()) {
-                    audio.play("assets/sounds/jump.wav");
-                }
-                physics.moveCharacter(move * speed, jumpNow, paused ? 0.0f : dt);
-
-                // Landing + footsteps ride the grounded state's edges.
-                const bool grounded = physics.characterGrounded();
-                if (grounded && !player.wasGrounded) {
-                    audio.play("assets/sounds/land.wav");
-                }
-                player.wasGrounded = grounded;
-                if (grounded && move != glm::vec3(0.0f) && !paused) {
-                    player.stepTimer -= dt * (speed > 5.0f ? 1.5f : 1.0f);
-                    if (player.stepTimer <= 0.0f) {
-                        audio.play("assets/sounds/step.wav");
-                        player.stepTimer = 0.38f;
+                // Movement, jumping and footsteps only advance while playing;
+                // a paused/title/won world is frozen behind its menu.
+                if (simRun) {
+                    glm::vec3 move{0.0f};
+                    if (input.isKeyDown(forge::Key::W)) {
+                        move += forward;
                     }
-                } else {
-                    player.stepTimer = 0.12f; // first step lands quickly
+                    if (input.isKeyDown(forge::Key::S)) {
+                        move -= forward;
+                    }
+                    if (input.isKeyDown(forge::Key::D)) {
+                        move += right;
+                    }
+                    if (input.isKeyDown(forge::Key::A)) {
+                        move -= right;
+                    }
+                    if (move != glm::vec3(0.0f)) {
+                        move = glm::normalize(move);
+                    }
+                    const float speed = input.isKeyDown(forge::Key::LeftShift) ? 7.0f : 4.5f;
+                    const bool jumpNow = input.wasKeyPressed(forge::Key::Space);
+                    if (jumpNow && physics.characterGrounded()) {
+                        audio.play("assets/sounds/jump.wav");
+                    }
+                    physics.moveCharacter(move * speed, jumpNow, dt);
+
+                    // Landing + footsteps ride the grounded state's edges.
+                    const bool grounded = physics.characterGrounded();
+                    if (grounded && !player.wasGrounded) {
+                        audio.play("assets/sounds/land.wav");
+                    }
+                    player.wasGrounded = grounded;
+                    if (grounded && move != glm::vec3(0.0f)) {
+                        player.stepTimer -= dt * (speed > 5.0f ? 1.5f : 1.0f);
+                        if (player.stepTimer <= 0.0f) {
+                            audio.play("assets/sounds/step.wav");
+                            player.stepTimer = 0.38f;
+                        }
+                    } else {
+                        player.stepTimer = 0.12f; // first step lands quickly
+                    }
                 }
 
                 const glm::vec3 eye = physics.characterPosition() + glm::vec3(0.0f, 0.65f, 0.0f);
@@ -584,7 +643,7 @@ int main() {
                 camera.target = eye + look;
 
                 // ---- Gravity glove: grab / carry / throw / drop.
-                if (input.wasMousePressed(forge::MouseButton::Left)) {
+                if (simRun && input.wasMousePressed(forge::MouseButton::Left)) {
                     if (player.holding) { // throw
                         physics.setLinearVelocity(player.held, look * 11.0f);
                         player.holding = false;
@@ -608,12 +667,13 @@ int main() {
                             eye.x, eye.y, eye.z, look.x, look.y, look.z);
                     }
                 }
-                if (player.holding && input.wasMousePressed(forge::MouseButton::Right)) {
+                if (simRun && player.holding &&
+                    input.wasMousePressed(forge::MouseButton::Right)) {
                     physics.setLinearVelocity(player.held, {0.0f, 0.0f, 0.0f}); // gentle drop
                     player.holding = false;
                     audio.play("assets/sounds/grab.wav"); // same blip, release direction
                 }
-                if (player.holding) {
+                if (simRun && player.holding) {
                     // Velocity spring: mass-independent, fights gravity for
                     // free, and held objects PUSH against obstacles instead
                     // of teleporting through them — that is the whole trick.
@@ -652,8 +712,9 @@ int main() {
                 ui->beginFrame();
                 ImGuizmo::BeginFrame();
 
-                if (playMode) {
+                if (playMode && gameState == GameState::Playing) {
                     // Minimal HUD: crosshair (filled while holding) + hints.
+                    // Only the live game shows it; the menus own the screen.
                     const ImGuiIO& io = ImGui::GetIO();
                     ImDrawList* draw = ImGui::GetForegroundDrawList();
                     const ImVec2 center{io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f};
@@ -664,7 +725,71 @@ int main() {
                     }
                     draw->AddText({12.0f, io.DisplaySize.y - 26.0f}, IM_COL32(255, 255, 255, 160),
                                   "WASD move  SPACE jump  LMB grab/throw  RMB drop  "
-                                  "E crates  TAB editor");
+                                  "E crates  ESC pause  TAB editor");
+                }
+
+                // ---- Menu overlays (week 6). A centred window per non-playing
+                // state. Buttons mirror the keyboard shortcuts so mouse works
+                // too. Restart soft-resets the run via the Lua resetGame().
+                if (playMode && gameState != GameState::Playing) {
+                    const ImGuiIO& io = ImGui::GetIO();
+                    ImGui::SetNextWindowPos({io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f},
+                                            ImGuiCond_Always, {0.5f, 0.5f});
+                    ImGui::SetNextWindowSize({320.0f, 0.0f}, ImGuiCond_Always);
+                    ImGui::Begin("##menu", nullptr,
+                                 ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
+                                     ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoTitleBar);
+                    const auto startRun = [&](bool reset) {
+                        if (reset) {
+                            script.runString("resetGame()");
+                        }
+                        gameState = GameState::Playing;
+                        cursorForState();
+                    };
+                    if (gameState == GameState::Title) {
+                        ImGui::TextUnformatted("VAULT");
+                        ImGui::Separator();
+                        ImGui::TextWrapped("A physics puzzle in eight rooms. Carry crates, "
+                                           "weigh down plates, break the glass, reach the exit.");
+                        ImGui::Spacing();
+                        if (ImGui::Button("Play", {-1.0f, 0.0f})) {
+                            startRun(false);
+                        }
+                        if (ImGui::Button("Quit", {-1.0f, 0.0f})) {
+                            window.requestClose();
+                        }
+                        ImGui::Spacing();
+                        ImGui::TextDisabled("ENTER play   ESC quit");
+                    } else if (gameState == GameState::Paused) {
+                        ImGui::TextUnformatted("Paused");
+                        ImGui::Separator();
+                        if (ImGui::Button("Resume", {-1.0f, 0.0f})) {
+                            gameState = GameState::Playing;
+                            cursorForState();
+                        }
+                        if (ImGui::Button("Restart", {-1.0f, 0.0f})) {
+                            startRun(true);
+                        }
+                        if (ImGui::Button("Quit", {-1.0f, 0.0f})) {
+                            window.requestClose();
+                        }
+                        ImGui::Spacing();
+                        ImGui::TextDisabled("ESC resume");
+                    } else { // Won
+                        ImGui::TextUnformatted("VAULT CLEARED");
+                        ImGui::Separator();
+                        ImGui::TextWrapped("Every room solved. Thanks for playing.");
+                        ImGui::Spacing();
+                        if (ImGui::Button("Play again", {-1.0f, 0.0f})) {
+                            startRun(true);
+                        }
+                        if (ImGui::Button("Quit", {-1.0f, 0.0f})) {
+                            window.requestClose();
+                        }
+                        ImGui::Spacing();
+                        ImGui::TextDisabled("ENTER play again   ESC quit");
+                    }
+                    ImGui::End();
                 }
 
                 if (!playMode) {
@@ -760,11 +885,11 @@ int main() {
                 } // !playMode (editor panels + gizmo)
             }
 
-            // Simulation control: pause freezes gameplay+physics; Step runs
-            // exactly one 60 Hz tick. Typing in the UI suppresses gameplay
-            // input (the script polls keys).
+            // Simulation control: simRun freezes gameplay+physics behind a
+            // menu (or the editor's Pause). Step runs exactly one 60 Hz tick.
+            // Typing in the UI suppresses gameplay input (the script polls keys).
             const bool typing = ui && ui->wantCaptureKeyboard();
-            if (!paused) {
+            if (simRun) {
                 if (!typing) {
                     script.update(dt); // gameplay decides first...
                 }
@@ -777,8 +902,8 @@ int main() {
 
             // Keyframe animation drives the platform; the collider rides
             // along via teleport (a kinematic body is the proper follow-up,
-            // noted in ADR-020). Paused sim pauses animation too.
-            if (!paused || stepOnce) {
+            // noted in ADR-020). A frozen sim freezes animation too.
+            if (simRun || stepOnce) {
                 animTime += dt;
             }
             if (scene.alive(platformEntity)) {
@@ -788,7 +913,7 @@ int main() {
                     physics.teleport(pb->id, pt.position);
                 }
             }
-            sparks.update(paused ? 0.0f : dt);
+            sparks.update(simRun ? dt : 0.0f);
 
             if (renderer && now - lastPoll > std::chrono::milliseconds(500)) {
                 lastPoll = now;

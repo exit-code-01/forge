@@ -258,6 +258,12 @@ glm::vec3 PhysicsWorld::characterPosition() const {
     return {p.GetX(), p.GetY(), p.GetZ()};
 }
 
+void PhysicsWorld::setCharacterPosition(const glm::vec3& position) {
+    m_impl->character->SetPosition(JPH::RVec3(position.x, position.y, position.z));
+    m_impl->character->SetLinearVelocity(JPH::Vec3::sZero());
+    m_impl->characterVerticalVelocity = 0.0f; // else the next frame re-applies the fall
+}
+
 std::vector<BodyId> PhysicsWorld::overlapBox(const glm::vec3& center,
                                              const glm::vec3& halfExtents) const {
     const JPH::AABox box(

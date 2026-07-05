@@ -72,6 +72,12 @@ public:
                        glm::vec3 halfExtents, const std::string& texture, bool dynamic)>
         onSpawnEntity;
     std::function<glm::vec3()> onPlayerPosition;
+    // Respawn/checkpoint (week 6): scripts warp the player; the host owns the
+    // character controller. Pairs with onPlayerPosition.
+    std::function<void(glm::vec3 position)> onSetPlayerPosition;
+    // Run complete (week 6): the script fires this once the finale is cleared
+    // so the host can raise the win screen. Host owns the menu/game state.
+    std::function<void()> onWin;
     // Per-room lighting pass (week 5): scripts set the key-light colour (rgb *
     // HDR intensity) and direction by room; the host owns the renderer. When
     // direction is the zero vector the host keeps its current direction.

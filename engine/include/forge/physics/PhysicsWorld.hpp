@@ -96,6 +96,9 @@ public:
     void moveCharacter(const glm::vec3& horizontalVelocity, bool jump, float dtSeconds);
     [[nodiscard]] glm::vec3 characterPosition() const; // capsule center
     [[nodiscard]] bool characterGrounded() const;
+    // Respawn/checkpoint warp (VAULT week 6): hard-set the capsule center and
+    // clear its velocity so the player doesn't inherit fall speed on respawn.
+    void setCharacterPosition(const glm::vec3& position);
 
     // Week 2: DYNAMIC bodies whose bounds overlap an axis-aligned box.
     // The pressure-plate primitive: cheap broadphase query, main thread,

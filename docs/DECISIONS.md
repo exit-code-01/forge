@@ -393,3 +393,35 @@ snapping. The audio beds are two committed, deterministic generators
 (tools/gen_music.py — stdlib wave, seamless equal-power crossfade loops), the
 same procedural-provenance discipline as gen_sounds.py and gen_textures.py:
 nothing in the tree that a script can't rebuild.
+
+
+## ADR-022 — VAULT week 6: a menu FSM and checkpoint recovery
+
+Week 6 closed the loop VAULT was missing: a way to START a run, PAUSE it, and
+be TOLD you won — plus recovery when the corridor void eats you or a crate.
+Two seams, both minimal, both shaped by the game and not speculation. MENU
+STATE lives in the HOST, not Lua: a four-state machine (Title / Playing /
+Paused / Won) layered over the existing play mode. Game/menu state is the
+host's business (it owns the window, the cursor, the render loop); the script
+only SIGNALS transitions it alone can know — `forge.game.win()` fires once the
+finale clears, and the host raises the Won screen. Esc drives the machine in
+play mode (Title/Won quit, Playing<->Paused toggle); the editor (Tab) keeps
+its old Esc = quit, because the editor is a dev tool orthogonal to game state.
+A single `simRun` boolean gates ALL gameplay simulation — movement, glove,
+script.update, physics.update, animation, sparks — so the non-playing states
+FREEZE the world behind their menu instead of running it blind under an
+overlay. The menus are ImGui (already in the tree for the editor/HUD); no new
+UI layer for three centred windows. CHECKPOINTS + VOID RECOVERY are Lua, since
+they're level logic (ADR-018): scene.lua advances a checkpoint as the player
+crosses each room's near wall, and respawns the player (or a fallen crate) to
+the last safe spot when it drops below the void plane or on a manual R press —
+this closes the flagged corridor-void crate-loss bug. The one engine gap it
+needed: `PhysicsWorld::setCharacterPosition` (warp the CharacterVirtual and
+zero its velocity — the controller owns position, so Lua can't teleport it
+directly), exposed as `forge.player.teleport`. RESTART is a SOFT reset
+(`resetGame()` in Lua): it returns every mutable thing — player, crates, plate
+and laser latches, drone, and re-spawned shattered glass — to its start
+WITHOUT rebuilding geometry, because destroyed entities can't otherwise
+return and a full scene rebuild is a bigger hammer than a restart needs. A
+hard `rebuild` remains the noted follow-up if a room's geometry ever needs to
+change on restart.
