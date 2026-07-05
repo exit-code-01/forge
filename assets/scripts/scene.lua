@@ -195,7 +195,7 @@ local function buildRelayRing()
     shell("R9", -105.4, -119.4, 14)
     framedWall("R9 NearWall", -105.4, 14)
     framedWall("R9 FarWall", -119.4, 14)
-    box("Door 9", vec3(0, 1.25, -119.4), vec3(2.2, 2.5, 0.32), "metal", true)
+    box("Door 9", vec3(0, 1.25, -119.4), vec3(2.2, 2.5, 0.32), "metal_red", true)
     -- centre block seals the east side: the path is S lane -> W lane -> N lane
     box("R9 Block", vec3(2.4, 1.6, -112.4), vec3(8.8, 3.6, 4.0), "concrete", true)
     for gi, gz in ipairs({ -110.4, -114.4 }) do -- gated dividers across the W lane
@@ -204,7 +204,7 @@ local function buildRelayRing()
         box(id .. " E", vec3(-2.8, 1.6, gz), vec3(1.6, 3.6, 0.4), "concrete", true)
         box(id .. " Top", vec3(-4.4, 3.0, gz), vec3(1.6, 0.8, 0.4), "concrete", true)
         box("Gate 9" .. (gi == 1 and "a" or "b"), vec3(-4.4, 1.25, gz), vec3(1.6, 2.5, 0.32),
-            "metal", true)
+            "metal_red", true)
     end
     for _, r in ipairs({ { "r1", -108.0, 6.6 }, { "r2", -112.4, -2.2 }, { "r3", -117.0, 6.6 } }) do
         box("Emitter " .. r[1], vec3(-6.6, 0.35, r[2]), vec3(0.3, 0.3, 0.3), "laser", true)
@@ -222,21 +222,21 @@ local function buildAtrium()
     shell("R10", -121.4, -137.4, 16)
     framedWall("R10 NearWall", -121.4, 16)
     framedWall("R10 FarWall", -137.4, 16)
-    box("Door 10", vec3(0, 1.25, -137.4), vec3(2.2, 2.5, 0.32), "metal", true)
+    box("Door 10", vec3(0, 1.25, -137.4), vec3(2.2, 2.5, 0.32), "metal_red", true)
     -- Wing W (x -8..-4): cage opened by sustained weight on p10w (drone/crate)
     box("Wing W N", vec3(-6, 1.6, -131.0), vec3(4, 3.6, 0.4), "concrete", true)
     box("Wing W S", vec3(-6, 1.6, -126.0), vec3(4, 3.6, 0.4), "concrete", true)
     box("Wing W E1", vec3(-4, 1.6, -130.15), vec3(0.4, 3.6, 1.7), "concrete", true)
     box("Wing W E2", vec3(-4, 1.6, -126.85), vec3(0.4, 3.6, 1.7), "concrete", true)
     box("Wing W Top", vec3(-4, 3.0, -128.5), vec3(0.4, 0.8, 1.6), "concrete", true)
-    box("Cage W", vec3(-4, 1.25, -128.5), vec3(0.32, 2.5, 1.6), "metal", true)
+    box("Cage W", vec3(-4, 1.25, -128.5), vec3(0.32, 2.5, 1.6), "metal_red", true)
     -- Wing E (x 4..8): timed cage — body-press p10e and sprint
     box("Wing E N", vec3(6, 1.6, -133.0), vec3(4, 3.6, 0.4), "concrete", true)
     box("Wing E S", vec3(6, 1.6, -128.0), vec3(4, 3.6, 0.4), "concrete", true)
     box("Wing E W1", vec3(4, 1.6, -132.15), vec3(0.4, 3.6, 1.7), "concrete", true)
     box("Wing E W2", vec3(4, 1.6, -128.85), vec3(0.4, 3.6, 1.7), "concrete", true)
     box("Wing E Top", vec3(4, 3.0, -130.5), vec3(0.4, 0.8, 1.6), "concrete", true)
-    box("Cage E", vec3(4, 1.25, -130.5), vec3(0.32, 2.5, 1.6), "metal", true)
+    box("Cage E", vec3(4, 1.25, -130.5), vec3(0.32, 2.5, 1.6), "metal_red", true)
     -- Wing N (NW corner): crate behind an x-thin glass window
     box("Wing N S", vec3(-6, 1.6, -133.4), vec3(4, 3.6, 0.4), "concrete", true)
     box("Wing N E1", vec3(-4, 1.6, -136.95), vec3(0.4, 3.6, 0.9), "concrete", true)
@@ -258,13 +258,13 @@ local function buildRooms()
         framedWall(id .. " FarWall", z0 - 10)
         -- 0.32 thick vs the 0.4 frame: recessed 4 cm so an OPEN door's faces
         -- never sit coplanar with the frame's top piece (z-fighting fix).
-        box("Door " .. i, vec3(0, 1.25, z0 - 10), vec3(2.2, 2.5, 0.32), "metal", true)
+        box("Door " .. i, vec3(0, 1.25, z0 - 10), vec3(2.2, 2.5, 0.32), "metal_red", true)
         corridor("Cor" .. i, z0 - 10) -- Cor8 now leads on to R9 (week 8)
     end
     -- plates (visual slabs; logic reads the plates2 regions)
     for _, pl in ipairs(plates2) do
         box("Plate " .. pl.id, vec3(pl.center.x, 0.1, pl.center.z), vec3(1.4, 0.2, 1.4),
-            "metal", true)
+            "metal_orange", true)
     end
     -- room contents (fixtures here; crates spawn from roomCrates below)
     laserRig(2, -26.0)
@@ -302,6 +302,10 @@ local won = false
 function onStart()
     forge.log("scene.lua loaded (" .. _VERSION .. ")")
     buildRooms()
+    -- Colour language (week 9): the host spawned the tutorial props before
+    -- the law existed — retint them. red = locked, orange = interactable.
+    forge.scene.setTexture("Exit Door", "metal_red")
+    forge.scene.setTexture("Plate T", "metal_orange")
     -- Week 5 audio beds: persistent looping voices (own volume). Guarded so a
     -- hot-reload of this script doesn't stack a second copy on top.
     if not audioStarted then
@@ -393,20 +397,25 @@ local function updateDrone(dt)
     droneTime = droneTime + dt
     local p = forge.player.position()
     if forge.input.pressed("q") then
+        -- The drone ANSWERS (week 9, SPARK spirit): happy double-beep for a
+        -- command it takes, a low buzz for "nothing to hold here".
         if drone.parkedAt then
             drone.parkedAt = nil
-            forge.audio.play("assets/sounds/jump.wav")
+            forge.audio.play("assets/sounds/beep_ok.wav")
             forge.log("drone: recalled")
         else
             for id, park in pairs(drone.parks) do
                 if p.z > park.zMin and p.z < park.zMax then
                     drone.parkedAt = id
-                    forge.audio.play("assets/sounds/grab.wav")
+                    forge.audio.play("assets/sounds/beep_ok.wav")
                     forge.log("drone: parking at " .. id)
                     break
                 end
             end
-            if not drone.parkedAt then forge.log("drone: nothing to hold here") end
+            if not drone.parkedAt then
+                forge.audio.play("assets/sounds/beep_no.wav")
+                forge.log("drone: nothing to hold here")
+            end
         end
     end
     local target
@@ -441,6 +450,7 @@ local function updateRespawn(p)
     -- Advance the checkpoint as the player crosses each room's near wall.
     while curCp < #checkpoints and p.z <= checkpoints[curCp + 1].z do
         curCp = curCp + 1
+        forge.audio.play("assets/sounds/chime.wav", 0.6) -- week 9: reward tone
         forge.log("checkpoint reached (" .. curCp .. ")")
     end
     -- Player fell into a void, or asked for a manual respawn (R).
@@ -473,6 +483,16 @@ function resetGame()
     plate.pressed = false
     laser.blocked = false
     curHint = nil -- re-push the hint on the first frame back
+    -- Colour language resets EXPLICITLY: clearing the latches above skips the
+    -- state-change handlers, so green things would stay green without this.
+    for name in pairs(doors2) do forge.scene.setTexture(name, "metal_red") end
+    for _, pl in ipairs(plates2) do forge.scene.setTexture("Plate " .. pl.id, "metal_orange") end
+    for _, lz in ipairs(lasers2) do
+        forge.scene.setTexture("Receiver " .. lz.id:gsub("^l", ""), "laser")
+    end
+    forge.scene.setTexture("Exit Door", "metal_red")
+    forge.scene.setTexture("Plate T", "metal_orange")
+    forge.scene.setTexture("Laser Receiver", "laser")
     -- Re-spawn shattered panes (each pane knows its own scale — Glass 10
     -- faces sideways, so the old shared z-thin scale no longer fits all).
     for _, gl in ipairs(glasses2) do
@@ -517,6 +537,11 @@ function onUpdate(dt)
     if pressedNow ~= plate.pressed then
         plate.pressed = pressedNow
         forge.audio.play(pressedNow and "assets/sounds/land.wav" or "assets/sounds/grab.wav")
+        -- Answer back (week 9): light + sound + particles, synced.
+        forge.scene.setTexture("Plate T", pressedNow and "metal_green" or "metal_orange")
+        forge.scene.setTexture("Exit Door", pressedNow and "metal_green" or "metal_red")
+        forge.fx.burst(vec3(plate.center.x, 0.5, plate.center.z), 8)
+        forge.fx.burst(vec3(door.closed.x, 0.4, door.closed.z + 0.4), 10) -- door steam
         forge.log(pressedNow and "plate: PRESSED - door opening"
                               or "plate: released - door closing")
     end
@@ -535,6 +560,8 @@ function onUpdate(dt)
     if blockedNow ~= laser.blocked then
         laser.blocked = blockedNow
         forge.audio.play(blockedNow and "assets/sounds/grab.wav" or "assets/sounds/jump.wav")
+        forge.scene.setTexture(laser.receiver, blockedNow and "metal_green" or "laser")
+        forge.fx.burst(receiverPos, 8)
         forge.log(blockedNow and "laser: BLOCKED" or "laser: circuit restored")
     end
 
@@ -578,6 +605,8 @@ function onUpdate(dt)
         if now ~= (state.plates[pl.id] == true) then
             state.plates[pl.id] = now
             forge.audio.play(now and "assets/sounds/land.wav" or "assets/sounds/grab.wav")
+            forge.scene.setTexture("Plate " .. pl.id, now and "metal_green" or "metal_orange")
+            forge.fx.burst(vec3(pl.center.x, 0.5, pl.center.z), 8)
             forge.log("plate " .. pl.id .. (now and ": on" or ": off"))
         end
     end
@@ -592,6 +621,10 @@ function onUpdate(dt)
         if cut ~= (state.lasers[lz.id] == true) then
             state.lasers[lz.id] = cut
             forge.audio.play(cut and "assets/sounds/grab.wav" or "assets/sounds/jump.wav")
+            -- receiver names: l2 -> "Receiver 2", r1 -> "Receiver r1"
+            local rname = "Receiver " .. lz.id:gsub("^l", "")
+            forge.scene.setTexture(rname, cut and "metal_green" or "laser")
+            forge.fx.burst(forge.scene.getPosition(rname), 8)
             forge.log("laser " .. lz.id .. (cut and ": blocked" or ": restored"))
         end
     end
@@ -600,6 +633,8 @@ function onUpdate(dt)
         if wantNow ~= d.want then
             d.want = wantNow
             forge.audio.play("assets/sounds/land.wav", 0.5) -- door motor thunk
+            forge.scene.setTexture(name, wantNow and "metal_green" or "metal_red")
+            forge.fx.burst(vec3(d.closed.x, 0.4, d.z + 0.4), 10) -- door steam
             forge.log(name .. (wantNow and ": opening" or ": closing"))
         end
         forge.scene.setPosition(name,
@@ -629,6 +664,7 @@ function onUpdate(dt)
         if p.z < winZ then
             won = true
             forge.audio.play("assets/sounds/kick.wav")
+            forge.audio.play("assets/sounds/chime.wav")
             forge.fx.burst(vec3(p.x, p.y + 0.5, p.z), 30)
             forge.log("*** VAULT RUN COMPLETE: all 8 rooms ***")
             forge.game.win() -- raise the win screen (host owns the menu)

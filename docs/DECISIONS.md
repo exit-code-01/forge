@@ -479,3 +479,33 @@ the hub's plate row can't be double-pressed from between two plates).
 Verified live: standing on R1's plate now opens Door 1 with no crate.
 The finish line moved from z -104.4 to -138.4; checkpoints, the lighting
 ladder, and the hint ladder each grew two rungs to match.
+
+## ADR-025 — VAULT week 9: the colour language, on a texture budget
+
+Week 9 is the expanded master prompt's art/feel week, mapped onto this
+track's build. Two of its laws were unmet and affordable; both shipped.
+READABLE PUZZLE LANGUAGE ("colour coding is law: orange = interactable,
+red = locked/hazard, green = solved/powered"): the honest carrier is
+emissive materials under an HDR pipeline, and that engine week hasn't
+happened — so the stand-in is ALBEDO: three deterministic tints of the
+metal texture (gen_textures.py, refactored so metal.png stays
+byte-identical) and ONE new engine seam, forge.scene.setTexture(name,
+texture), behind a host-side texture registry that replaced the
+onSpawnEntity if-chain. Doors and cages spawn red and flip green as they
+open; plates spawn orange and go green under weight; laser receivers go
+green when their circuit condition is met. The seam is deliberately
+name-based on both sides: when HDR + emissive land (ENGINE_GAPS.md), the
+Lua call sites don't change — the host just resolves the same names to
+richer materials. EVERY INTERACTION ANSWERS BACK ("light + sound +
+particle within 100ms, no silent state changes"): every plate, door, and
+laser state change now fires its retint, its sound, and an fx.burst in
+the same frame — door steam at the base, plate puffs, receiver sparks.
+AUDIO PASS: chime.wav (checkpoints + the win — reward, not alarm) and the
+drone's voice, beep_ok/beep_no — the SPARK principle from the prompt
+("personality is animation" and beeps, no text) at our drone's scale: it
+now ANSWERS Q commands instead of borrowing the player's grab/jump
+sounds. Bookkeeping: ENGINE_GAPS.md created per the prompt's rule 6,
+back-filled from ADRs 018-024 so the ledger is complete, with the three
+open gaps (kinematic platform, HDR+emissive, skeletal animation) costed.
+resetGame retints explicitly — clearing latches skips the change
+handlers, so green would otherwise survive a restart.

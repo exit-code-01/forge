@@ -139,6 +139,15 @@ void ScriptEngine::bindScene() {
             onSetEntityScale(name, scale);
         }
     });
+    // forge.scene.setTexture(name, texture): the colour-language seam (week
+    // 9) — doors flip red/green, plates orange/green. Texture names resolve
+    // host-side; unknown names are ignored there.
+    sceneTable.set_function("setTexture", [this](const std::string& name,
+                                                 const std::string& texture) {
+        if (onSetEntityTexture) {
+            onSetEntityTexture(name, texture);
+        }
+    });
     sceneTable.set_function("destroy", [this](const std::string& name) {
         if (onDestroyEntity) {
             onDestroyEntity(name);

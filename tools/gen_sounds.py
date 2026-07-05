@@ -90,6 +90,35 @@ def main() -> None:
         return 0.7 * (hp + ring) * math.exp(-t * 11.0)
     render("shatter.wav", 0.3, shatter)
 
+    # ---- week 9 audio pass ----
+    # chime: two-note bell (checkpoints, the win) - reward, not alarm.
+    def chime(t):
+        n1 = math.sin(2.0 * math.pi * 880.0 * t) * math.exp(-t * 6.0)
+        t2 = max(0.0, t - 0.16)
+        n2 = math.sin(2.0 * math.pi * 1318.5 * t2) * math.exp(-t2 * 6.0) if t > 0.16 else 0.0
+        return 0.30 * (n1 + n2)
+    render("chime.wav", 0.6, chime)
+
+    # beep_ok: the drone's happy double-beep (SPARK personality, beeps only).
+    def beep_ok(t):
+        if t < 0.09:
+            f, tt = 1175.0, t
+        elif 0.12 <= t < 0.22:
+            f, tt = 1568.0, t - 0.12
+        else:
+            return 0.0
+        env = min(tt / 0.008, 1.0) * math.exp(-tt * 22.0)
+        sq = 1.0 if math.sin(2.0 * math.pi * f * t) >= 0.0 else -1.0  # squarish = robotic
+        return 0.22 * env * (0.6 * sq + 0.4 * math.sin(2.0 * math.pi * f * t))
+    render("beep_ok.wav", 0.26, beep_ok)
+
+    # beep_no: low descending buzz - the drone says "can't do that here".
+    def beep_no(t):
+        f = 340.0 - 160.0 * t / 0.25
+        sq = 1.0 if math.sin(2.0 * math.pi * f * t) >= 0.0 else -1.0
+        return 0.20 * sq * math.exp(-t * 7.0)
+    render("beep_no.wav", 0.25, beep_no)
+
 
 if __name__ == "__main__":
     main()

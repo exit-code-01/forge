@@ -59,19 +59,29 @@ def main() -> None:
     write_png(os.path.join(out, "floor.png"), rows)
 
     # metal: dark blue-gray, horizontal brush streaks, panel lines + rivets.
-    streak = [rng.randint(-10, 10) for _ in range(SIZE)]
-    rows = []
-    for y in range(SIZE):
-        row = []
-        panel = 16 if y % 128 in (0, 1, 2) else 0
-        for x in range(SIZE):
-            rivet = 0
-            if (x % 128 in (14, 15, 16)) and (y % 128 in (14, 15, 16)):
-                rivet = -26
-            base = 96 + streak[y] + rng.randint(-3, 3) - panel + rivet
-            row.append((clamp(base - 6), clamp(base), clamp(base + 10)))
-        rows.append(row)
-    write_png(os.path.join(out, "metal.png"), rows)
+    # Tinted variants carry the colour language (week 9): red = locked,
+    # green = solved/powered, orange = interactable. metal.png is generated
+    # FIRST so its bytes stay identical to the week-4 original.
+    def metal(filename, tint):
+        streak = [rng.randint(-10, 10) for _ in range(SIZE)]
+        rows = []
+        for y in range(SIZE):
+            row = []
+            panel = 16 if y % 128 in (0, 1, 2) else 0
+            for x in range(SIZE):
+                rivet = 0
+                if (x % 128 in (14, 15, 16)) and (y % 128 in (14, 15, 16)):
+                    rivet = -26
+                base = 96 + streak[y] + rng.randint(-3, 3) - panel + rivet
+                row.append((clamp(base - 6 + tint[0]), clamp(base + tint[1]),
+                            clamp(base + 10 + tint[2])))
+            rows.append(row)
+        write_png(os.path.join(out, filename), rows)
+
+    metal("metal.png", (0, 0, 0))
+    metal("metal_red.png", (62, -28, -38))
+    metal("metal_green.png", (-30, 56, -28))
+    metal("metal_orange.png", (68, 20, -52))
 
 
 if __name__ == "__main__":

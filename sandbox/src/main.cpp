@@ -249,6 +249,9 @@ int main() {
         forge::TextureHandle concreteTexture{};
         forge::TextureHandle floorTexture{};
         forge::TextureHandle metalTexture{};
+        // Script-facing texture registry: scene.lua spawns and RETINTS by
+        // name (colour language, week 9). The host owns what a name means.
+        std::unordered_map<std::string, forge::TextureHandle> textureByName;
         if (renderer) {
             std::vector<forge::Vertex> vertices;
             std::vector<uint32_t> indices;
@@ -276,6 +279,17 @@ int main() {
             const auto metalImage = forge::assets::loadImage("assets/textures/metal.png");
             metalTexture =
                 renderer->addTexture(metalImage.width, metalImage.height, metalImage.rgba);
+
+            textureByName = {{"crate", crateTexture},       {"laser", laserTexture},
+                             {"glass", glassTexture},       {"concrete", concreteTexture},
+                             {"floor", floorTexture},       {"metal", metalTexture}};
+            // Colour-language tints (week 9): red = locked, green = solved,
+            // orange = interactable. Script-only names, no dedicated handles.
+            for (const char* name : {"metal_red", "metal_green", "metal_orange"}) {
+                const auto img =
+                    forge::assets::loadImage(std::string("assets/textures/") + name + ".png");
+                textureByName[name] = renderer->addTexture(img.width, img.height, img.rgba);
+            }
         }
 
         // Physics owns WHERE dynamic things are; the ECS owns WHAT exists.
@@ -483,21 +497,20 @@ int main() {
         };
         script.onSpawnEntity = [&](const std::string& name, glm::vec3 pos, glm::vec3 sc,
                                    glm::vec3 half, const std::string& texture, bool dynamic) {
-            forge::TextureHandle tex = checker;
-            if (texture == "crate") {
-                tex = crateTexture;
-            } else if (texture == "laser") {
-                tex = laserTexture;
-            } else if (texture == "glass") {
-                tex = glassTexture;
-            } else if (texture == "concrete") {
-                tex = concreteTexture;
-            } else if (texture == "floor") {
-                tex = floorTexture;
-            } else if (texture == "metal") {
-                tex = metalTexture;
+            const auto it = textureByName.find(texture);
+            spawnEntity(name, pos, sc, cubeMesh, it != textureByName.end() ? it->second : checker,
+                        half, dynamic, 0.4f);
+        };
+        // Colour language (week 9): scripts retint by name — doors flip
+        // red/green, plates orange/green. Unknown names are a no-op.
+        script.onSetEntityTexture = [&](const std::string& name, const std::string& texture) {
+            const auto e = findByName(name);
+            const auto it = textureByName.find(texture);
+            if (scene.alive(e) && it != textureByName.end()) {
+                if (auto* mr = scene.tryGet<MeshRendererC>(e)) {
+                    mr->texture = it->second;
+                }
             }
-            spawnEntity(name, pos, sc, cubeMesh, tex, half, dynamic, 0.4f);
         };
         script.onPlayerPosition = [&]() { return physics.characterPosition(); };
         // Per-room lighting pass (week 5): scene.lua tints the key light by

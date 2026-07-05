@@ -65,6 +65,11 @@ public:
     std::function<void(const std::string& name, glm::vec3 position)> onSetEntityPosition;
     std::function<glm::vec3(const std::string& name)> onGetEntityPosition;
     std::function<void(const std::string& name, glm::vec3 scale)> onSetEntityScale;
+    // Colour language (week 9, master-prompt law: orange=interactable,
+    // red=locked, green=solved). Scripts retint entities by swapping the
+    // named texture; the host owns what texture names mean. This is the
+    // affordable stand-in until HDR + emissive materials land.
+    std::function<void(const std::string& name, const std::string& texture)> onSetEntityTexture;
     std::function<void(const std::string& name)> onDestroyEntity; // glass shatters
     // Rooms are Lua data (week 3): scripts spawn NAMED, textured, collidable
     // entities; the host owns meshes/textures/ECS. halfExtents 0 = no body.
