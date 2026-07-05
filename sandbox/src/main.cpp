@@ -317,8 +317,10 @@ int main() {
                     {3.15f, 1.8f, 0.2f}, false);
         spawnEntity("Wall N Top", {0.0f, 3.0f, -7.2f}, {2.2f, 0.8f, 0.4f}, cubeMesh,
                     concreteTexture, {1.1f, 0.4f, 0.2f}, false);
-        spawnEntity("Exit Door", {0.0f, 1.25f, -7.2f}, {2.2f, 2.5f, 0.4f}, cubeMesh, crateTexture,
-                    {1.1f, 1.25f, 0.2f}, false);
+        // Door is 0.32 thick vs the 0.4 wall: recessed 4 cm in its frame so an
+        // OPEN door's faces never sit coplanar with "Wall N Top" (z-fighting).
+        spawnEntity("Exit Door", {0.0f, 1.25f, -7.2f}, {2.2f, 2.5f, 0.32f}, cubeMesh, crateTexture,
+                    {1.1f, 1.25f, 0.16f}, false);
         spawnEntity("Exit Pad", {0.0f, -0.2f, -8.6f}, {3.0f, 0.4f, 2.6f}, cubeMesh, concreteTexture,
                     {1.5f, 0.2f, 1.3f}, false);
         // Glass pane just behind the exit door: throw a crate through it.
@@ -350,9 +352,9 @@ int main() {
                     {0.25f, 0.25f, 0.25f}, true, 0.3f);
         spawnEntity("Crate C", {1.3f, 0.4f, 0.8f}, {0.5f, 0.5f, 0.5f}, cubeMesh, crateTexture,
                     {0.25f, 0.25f, 0.25f}, true, 0.3f);
-        // Week-2 vocabulary placeholder (no logic yet) + the import mascot.
-        spawnEntity("Plate (week 2)", {-3.0f, 0.05f, 2.0f}, {1.4f, 0.1f, 1.4f}, cubeMesh,
-                    crateTexture, {0.7f, 0.05f, 0.7f}, false);
+        // Tutorial pressure plate (scene.lua animates it sinking) + the mascot.
+        spawnEntity("Plate T", {-3.0f, 0.05f, 2.0f}, {1.4f, 0.1f, 1.4f}, cubeMesh, crateTexture,
+                    {0.7f, 0.05f, 0.7f}, false);
         spawnEntity("Torus", {-3.5f, 0.27f, -3.5f}, {1.0f, 1.0f, 1.0f}, torusMesh, crateTexture,
                     {0.85f, 0.25f, 0.85f}, false);
 
@@ -391,6 +393,7 @@ int main() {
         // game state, and keeps its own Esc = quit.
         enum class GameState { Title, Playing, Paused, Won };
         GameState gameState = GameState::Title;
+        std::string hudHint; // per-room objective line, set by scene.lua
         const auto cursorForState = [&]() {
             window.setCursorCaptured(playMode && gameState == GameState::Playing);
         };
@@ -514,6 +517,8 @@ int main() {
             gameState = GameState::Won;
             cursorForState();
         };
+        // Objective hint (week 7): the script owns the words, we own the pixels.
+        script.onSetHint = [&](const std::string& text) { hudHint = text; };
         script.bindScene();
         script.runFile("assets/scripts/scene.lua");
 
@@ -577,6 +582,7 @@ int main() {
             lastTime = now;
 
             forge::Camera camera{};
+            bool aimGrabbable = false; // crosshair affordance: "this will grab"
             if (playMode) {
                 // ---- First-person: mouse-look + WASD through the capsule.
                 // Mouse-look only while actually playing — a frozen menu must
@@ -641,6 +647,17 @@ int main() {
                 const glm::vec3 eye = physics.characterPosition() + glm::vec3(0.0f, 0.65f, 0.0f);
                 camera.position = eye;
                 camera.target = eye + look;
+
+                // QoL (week 7): light up the crosshair when the glove WOULD
+                // grab — same raycast + dynamic-body test the click uses.
+                if (simRun && !player.holding) {
+                    if (const auto hit = physics.raycast(eye, look, 3.5f)) {
+                        const auto it = bodyToEntity.find(hit->body.value);
+                        auto* bc =
+                            it != bodyToEntity.end() ? scene.tryGet<BodyC>(it->second) : nullptr;
+                        aimGrabbable = bc != nullptr && bc->dynamic;
+                    }
+                }
 
                 // ---- Gravity glove: grab / carry / throw / drop.
                 if (simRun && input.wasMousePressed(forge::MouseButton::Left)) {
@@ -720,12 +737,23 @@ int main() {
                     const ImVec2 center{io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f};
                     if (player.holding) {
                         draw->AddCircleFilled(center, 5.0f, IM_COL32(255, 220, 120, 230));
+                    } else if (aimGrabbable) { // amber ring: the glove will grab
+                        draw->AddCircle(center, 6.0f, IM_COL32(255, 220, 120, 240), 0, 2.5f);
                     } else {
                         draw->AddCircle(center, 5.0f, IM_COL32(255, 255, 255, 200), 0, 1.5f);
                     }
+                    // Per-room objective hint (scene.lua sets it), top-centred.
+                    if (!hudHint.empty()) {
+                        const ImVec2 sz = ImGui::CalcTextSize(hudHint.c_str());
+                        const ImVec2 at{(io.DisplaySize.x - sz.x) * 0.5f, 34.0f};
+                        draw->AddRectFilled({at.x - 8.0f, at.y - 4.0f},
+                                            {at.x + sz.x + 8.0f, at.y + sz.y + 4.0f},
+                                            IM_COL32(0, 0, 0, 90), 4.0f);
+                        draw->AddText(at, IM_COL32(255, 255, 255, 205), hudHint.c_str());
+                    }
                     draw->AddText({12.0f, io.DisplaySize.y - 26.0f}, IM_COL32(255, 255, 255, 160),
                                   "WASD move  SPACE jump  LMB grab/throw  RMB drop  "
-                                  "E crates  ESC pause  TAB editor");
+                                  "Q drone  R respawn  E crates  ESC pause  TAB editor");
                 }
 
                 // ---- Menu overlays (week 6). A centred window per non-playing

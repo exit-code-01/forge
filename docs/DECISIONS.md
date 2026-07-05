@@ -425,3 +425,30 @@ WITHOUT rebuilding geometry, because destroyed entities can't otherwise
 return and a full scene rebuild is a bigger hammer than a restart needs. A
 hard `rebuild` remains the noted follow-up if a room's geometry ever needs to
 change on restart.
+
+## ADR-023 — VAULT week 7: coplanarity, plate feel, and a hint seam
+
+Polish week, driven by playtest notes. Z-FIGHTING: doors were 0.4 m thick —
+exactly the wall thickness — and 2.2 m wide — exactly the doorframe top
+piece's width — sharing a z-centre, so an OPEN door slid up into perfectly
+coplanar faces with its frame and shimmered. Doors are now 0.32 m, recessed
+4 cm inside the frame: no coplanar pair exists in any door state, and the
+recess reads as a door sitting IN a frame rather than a slab painted on the
+wall. Geometry lesson logged: never give two touching boxes the same
+face plane unless one hides the other. PLATE FEEL: pressure plates now
+visibly sink ~8 cm when pressed and ease back up. The trick that keeps it
+cheap: the DETECTION region is a fixed overlap box in space; only the visual
+slab animates, so the puzzle logic never chases its own moving sensor. Pure
+Lua, no engine change. TIMED PLATES: plates gain an optional holdTime — the
+signal persists N seconds after the weight leaves. R4 was redesigned around
+it: one crate (was two), two plates; weigh one with the crate, press the
+other with your body, sprint the door before the hold expires. First
+mechanic where TIME is the resource, built entirely in the generic plate
+system. HINT SEAM: one new engine hook, forge.hud.set_hint(text) — the
+script owns the WORDS (level knowledge, ADR-018), the host owns the pixels
+(top-centred HUD line). Scripts push only on change. QoL alongside: the
+crosshair flares amber when the glove's raycast lands on a grabbable body
+(same test the click runs, so the affordance never lies), door motion plays
+a motor thunk, and the key legend now lists Q/R. Looping-room designs for a
+possible week 8 are banked in docs/PUZZLE_IDEAS.md — five candidates, two
+picked, engine gaps per idea named up front.

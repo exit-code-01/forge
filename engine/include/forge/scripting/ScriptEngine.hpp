@@ -82,8 +82,11 @@ public:
     // HDR intensity) and direction by room; the host owns the renderer. When
     // direction is the zero vector the host keeps its current direction.
     std::function<void(glm::vec3 color, glm::vec3 direction)> onSetLighting;
+    // Objective hint line (week 7): the script owns WHAT the hint says (level
+    // knowledge); the host owns drawing it on the HUD. Empty string clears.
+    std::function<void(const std::string& text)> onSetHint;
     // forge.scene.setPosition/getPosition(name), forge.player.position(),
-    // forge.render.set_light(color, dir).
+    // forge.render.set_light(color, dir), forge.hud.set_hint(text).
     void bindScene();
 
     // Protected load/run. Returns false (and logs) on failure; previously

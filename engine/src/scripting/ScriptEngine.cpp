@@ -179,6 +179,15 @@ void ScriptEngine::bindScene() {
                 onSetLighting(color, dir.value_or(glm::vec3(0.0f)));
             }
         });
+
+    // forge.hud.set_hint(text): the per-room objective line (week 7). The
+    // script decides the words; the host draws them. "" clears the hint.
+    sol::table hudTable = forge.create_named("hud");
+    hudTable.set_function("set_hint", [this](const std::string& text) {
+        if (onSetHint) {
+            onSetHint(text);
+        }
+    });
 }
 
 void ScriptEngine::bindAudio(Audio& audio) {

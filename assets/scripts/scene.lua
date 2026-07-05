@@ -1,7 +1,7 @@
 -- assets/scripts/scene.lua — VAULT: tutorial + rooms 1-8, all Lua data.
 -- Hot-reloadable logic; GEOMETRY spawns once per run (restart to reshape).
 -- Layout runs NORTH (-z): tutorial | R1 carry | R2 laser-park | R3 throw |
--- R4 double plate | R5 drone intro | R6 plate+drone-beam | R7 glass wall |
+-- R4 timed plate sprint | R5 drone intro | R6 plate+drone-beam | R7 glass wall |
 -- R8 finale (2 plates + beam) | end pad. Drone: Q parks/recalls (flies
 -- ABOVE the open-top walls — steering, no navmesh, per the game plan).
 
@@ -39,7 +39,10 @@ local plates2 = { -- parkId: a parked drone counts as weight
     { id = "p1",  center = vec3(3.5, 0.35, -13.0),  half = vec3(0.7, 0.3, 0.7) },
     { id = "p3",  center = vec3(-3.5, 0.35, -38.0), half = vec3(0.7, 0.3, 0.7) },
     { id = "p4a", center = vec3(-3.0, 0.35, -50.0), half = vec3(0.7, 0.3, 0.7) },
-    { id = "p4b", center = vec3(3.0, 0.35, -50.0),  half = vec3(0.7, 0.3, 0.7) },
+    -- R4 redesign (week 7): ONE crate, TWO plates. p4b HOLDS its signal for a
+    -- few seconds after release — weigh p4a with the crate, press p4b with
+    -- your own body, then sprint the door before the hold runs out.
+    { id = "p4b", center = vec3(3.0, 0.35, -50.0),  half = vec3(0.7, 0.3, 0.7), holdTime = 3.5 },
     { id = "p5",  center = vec3(3.5, 0.35, -63.0),  half = vec3(0.7, 0.3, 0.7), parkId = "p5" },
     { id = "p6",  center = vec3(-3.5, 0.35, -75.0), half = vec3(0.7, 0.3, 0.7) },
     { id = "p7",  center = vec3(-3.5, 0.35, -88.0), half = vec3(0.7, 0.3, 0.7) },
@@ -65,8 +68,7 @@ local roomCrates = {
     { name = "Crate R1",  pos = vec3(-3.5, 0.4, -17.0) },
     { name = "Crate R2",  pos = vec3(-3.5, 0.4, -23.5) },
     { name = "Crate R3",  pos = vec3(3.5, 0.4, -35.0) },
-    { name = "Crate R4a", pos = vec3(-3.0, 0.4, -46.5) },
-    { name = "Crate R4b", pos = vec3(3.0, 0.4, -46.5) },
+    { name = "Crate R4a", pos = vec3(-3.0, 0.4, -46.5) }, -- R4's ONLY crate (timed plate)
     { name = "Crate R6",  pos = vec3(3.5, 0.4, -71.0) },
     { name = "Crate R7",  pos = vec3(-3.5, 0.4, -82.5) },
     { name = "Crate R8a", pos = vec3(-3.0, 0.4, -94.5) },
@@ -153,7 +155,9 @@ local function buildRooms()
         shell(id, z0, z0 - 10, 10)
         framedWall(id .. " NearWall", z0)      -- gap fix: rooms had open entries
         framedWall(id .. " FarWall", z0 - 10)
-        box("Door " .. i, vec3(0, 1.25, z0 - 10), vec3(2.2, 2.5, 0.4), "metal", true)
+        -- 0.32 thick vs the 0.4 frame: recessed 4 cm so an OPEN door's faces
+        -- never sit coplanar with the frame's top piece (z-fighting fix).
+        box("Door " .. i, vec3(0, 1.25, z0 - 10), vec3(2.2, 2.5, 0.32), "metal", true)
         if i < 8 then corridor("Cor" .. i, z0 - 10) end
     end
     -- plates (visual slabs; logic reads the plates2 regions)
@@ -222,6 +226,23 @@ local function roomLight(z)
 end
 local curLight = vec3(3.0, 2.9, 2.7)
 
+-- Objective hints (week 7 QoL): one line per room, host draws it top-centre.
+-- Same most-negative-first z ladder as roomLight.
+local function roomHint(z)
+    if z <= -104.4 then return "VAULT cleared. Head for the light."
+    elseif z <= -93.4 then return "R8: two plates AND the beam - everything you know"
+    elseif z <= -81.4 then return "R7: the plate is behind glass; crates break glass"
+    elseif z <= -69.4 then return "R6: plate + beam - the drone (Q) can hold one"
+    elseif z <= -57.4 then return "R5: no crates here; Q parks the drone on the plate"
+    elseif z <= -45.4 then return "R4: one crate, two plates - hold one yourself and RUN"
+    elseif z <= -33.4 then return "R3: the plate is across the room; throw the crate"
+    elseif z <= -21.4 then return "R2: something must sit in the beam"
+    elseif z <= -9.4 then return "R1: carry a crate onto the plate"
+    else return "weigh the plate to open the door - LMB grab / LMB throw"
+    end
+end
+local curHint = nil
+
 local function moveTowards(from, to, maxStep)
     local d = vec3(to.x - from.x, to.y - from.y, to.z - from.z)
     local len = math.sqrt(d.x * d.x + d.y * d.y + d.z * d.z)
@@ -230,6 +251,22 @@ local function moveTowards(from, to, maxStep)
     end
     local k = maxStep / len
     return vec3(from.x + d.x * k, from.y + d.y * k, from.z + d.z * k)
+end
+
+-- Pressure-plate sink (week 7): the DETECTION region is fixed in space, so
+-- the visual slab is free to ease down ~8 cm when its plate reads pressed.
+-- Generic plates rest at y 0.1; the tutorial slab ("Plate T") rests at 0.05.
+local function updatePlateVisuals(dt)
+    local step = 0.25 * dt
+    for _, pl in ipairs(plates2) do
+        local name = "Plate " .. pl.id
+        local at = forge.scene.getPosition(name)
+        local ty = plateOn(pl.id) and 0.02 or 0.1
+        forge.scene.setPosition(name, moveTowards(at, vec3(at.x, ty, at.z), step))
+    end
+    local tAt = forge.scene.getPosition("Plate T")
+    local tTy = plate.pressed and 0.01 or 0.05
+    forge.scene.setPosition("Plate T", moveTowards(tAt, vec3(tAt.x, tTy, tAt.z), step))
 end
 
 local droneTime = 0
@@ -312,9 +349,11 @@ function resetGame()
     state.plates = {}
     state.lasers = {}
     for _, d in pairs(doors2) do d.want = false end
+    for _, pl in ipairs(plates2) do pl.timer = nil end -- timed plates disarm
     drone.parkedAt = nil
     plate.pressed = false
     laser.blocked = false
+    curHint = nil -- re-push the hint on the first frame back
     -- Re-spawn shattered panes (all glass shares one visual scale).
     for _, gl in ipairs(glasses2) do
         if gl.broken then
@@ -345,6 +384,13 @@ function onUpdate(dt)
                     curLight.y + (tgt.y - curLight.y) * k,
                     curLight.z + (tgt.z - curLight.z) * k)
     forge.render.set_light(curLight)
+
+    -- ---- Objective hint: push only on change (crossing a room boundary) ----
+    local h = roomHint(pp.z)
+    if h ~= curHint then
+        curHint = h
+        forge.hud.set_hint(h)
+    end
 
     -- ---- Tutorial (bespoke) ----
     local pressedNow = #forge.physics.overlap(plate.center, plate.half) > 0
@@ -387,13 +433,27 @@ function onUpdate(dt)
         end
     end
 
-    -- ---- Drone ----
+    -- ---- Drone + plate visuals ----
     updateDrone(dt)
+    updatePlateVisuals(dt)
 
     -- ---- Rooms 1-8 generic systems ----
     for _, pl in ipairs(plates2) do
-        local now = #forge.physics.overlap(pl.center, pl.half) > 0
+        local raw = #forge.physics.overlap(pl.center, pl.half) > 0
                     or (pl.parkId ~= nil and droneAt(pl.parkId))
+        local now = raw
+        -- Timed plates (week 7): the signal HOLDS for holdTime seconds after
+        -- the weight leaves — press with your body, then sprint the door.
+        if pl.holdTime then
+            if raw then
+                pl.timer = pl.holdTime
+            elseif pl.timer and pl.timer > 0 then
+                pl.timer = pl.timer - dt
+                now = pl.timer > 0
+            else
+                now = false
+            end
+        end
         if now ~= (state.plates[pl.id] == true) then
             state.plates[pl.id] = now
             forge.audio.play(now and "assets/sounds/land.wav" or "assets/sounds/grab.wav")
@@ -417,6 +477,7 @@ function onUpdate(dt)
         local wantNow = d.cond()
         if wantNow ~= d.want then
             d.want = wantNow
+            forge.audio.play("assets/sounds/land.wav", 0.5) -- door motor thunk
             forge.log(name .. (wantNow and ": opening" or ": closing"))
         end
         forge.scene.setPosition(name,
