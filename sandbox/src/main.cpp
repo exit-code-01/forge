@@ -486,6 +486,11 @@ int main() {
             spawnEntity(name, pos, sc, cubeMesh, tex, half, dynamic, 0.4f);
         };
         script.onPlayerPosition = [&]() { return physics.characterPosition(); };
+        // Per-room lighting pass (week 5): scene.lua tints the key light by
+        // player z. Renderer holds it across frames; zero dir = keep the angle.
+        script.onSetLighting = [&](glm::vec3 color, glm::vec3 dir) {
+            renderer->setLighting(color, dir);
+        };
         script.bindScene();
         script.runFile("assets/scripts/scene.lua");
 
@@ -768,6 +773,7 @@ int main() {
                 stepOnce = false;
                 physics.update(1.0f / 60.0f);
             }
+            audio.update(); // reap finished one-shot voices (loops persist)
 
             // Keyframe animation drives the platform; the collider rides
             // along via teleport (a kinematic body is the proper follow-up,

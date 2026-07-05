@@ -366,3 +366,30 @@ collider follows via teleport; a proper KINEMATIC body type is the noted
 follow-up when platforms must push bodies rather than pass through edge
 cases. Lua reach: forge.audio.play and forge.fx.burst — sound and sparks
 are gameplay decisions (ADR-018), so scripts own them.
+
+## ADR-021 — VAULT week 5: a small mixer and a per-room light seam
+
+The lean-P8 promise (ADR-020) came due: VAULT wanted an ambient bed, a music
+underscore, and mood lighting that changes room to room, and the single
+engine-volume knob could not carry it. Two minimal seams, both shaped by what
+the game asked for, nothing more. AUDIO grew from one fire-and-forget play()
+into a small self-owned mixer: every voice is now a `ma_sound` this engine
+owns, carrying its OWN volume. This also fixed a latent bug — the old play()
+set miniaudio's MASTER volume per call, so the last SFX silently re-leveled
+every other voice. One-shots are decoded, played, and reaped by update()
+(erase-remove on ma_sound_at_end); looping voices (ambient/music) are
+STREAMED, not decoded into RAM, and return a `SoundHandle` for later
+setVolume()/stop(). Still no 3D spatialization: VAULT is rooms and corridors,
+and positional audio is weight a corridor game never spends. Lua reach:
+forge.audio.loop/set_volume/stop. LIGHTING: the key light was a hardcoded
+warm constant baked into drawFrame; week 5 lifts it to app-settable state on
+the renderer (`Renderer::setLighting(color, dir)`) with the old warm value as
+the default, so any scene that never calls it looks byte-identical to before.
+A zero direction means "keep the current angle" — retint without re-stating
+geometry. Because lighting mood is level data (ADR-018), scene.lua owns it:
+`forge.render.set_light` driven by player z, easing between rooms with a
+per-frame lerp so crossing a doorway fades colour over ~0.4 s instead of
+snapping. The audio beds are two committed, deterministic generators
+(tools/gen_music.py — stdlib wave, seamless equal-power crossfade loops), the
+same procedural-provenance discipline as gen_sounds.py and gen_textures.py:
+nothing in the tree that a script can't rebuild.

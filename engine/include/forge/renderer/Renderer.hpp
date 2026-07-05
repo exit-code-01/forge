@@ -96,6 +96,13 @@ public:
     void updateTexture(TextureHandle handle, uint32_t width, uint32_t height,
                        std::span<const uint8_t> rgba);
 
+    // Per-room lighting (VAULT week 5). color is the key light rgb * HDR
+    // intensity; direction is surface -> light (need not be normalized, the
+    // renderer normalizes). A zero direction keeps the current direction, so
+    // callers can retint without re-specifying the angle. Persists across
+    // frames until changed. Defaults to the warm facility key light.
+    void setLighting(glm::vec3 color, glm::vec3 direction = glm::vec3(0.0f));
+
     // Renders and presents one frame: shadow pass over all items, then the
     // lit scene (then the UI hook, if set). Safe to call when minimized
     // (no-op) or with an empty span.

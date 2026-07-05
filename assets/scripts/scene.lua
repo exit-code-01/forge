@@ -173,8 +173,33 @@ local won = false
 function onStart()
     forge.log("scene.lua loaded (" .. _VERSION .. ")")
     buildRooms()
+    -- Week 5 audio beds: persistent looping voices (own volume). Guarded so a
+    -- hot-reload of this script doesn't stack a second copy on top.
+    if not audioStarted then
+        audioStarted = true
+        forge.audio.loop("assets/sounds/ambient.wav", 0.30) -- HVAC room tone
+        forge.audio.loop("assets/sounds/music.wav", 0.22)   -- minor pad underscore
+    end
     forge.log("Q: park/recall drone (rooms 5, 6, 8)")
 end
+
+-- Per-room lighting pass (week 5): key-light colour by player z (rgb * HDR
+-- intensity; default warm facility key is (3.0, 2.9, 2.7)). Read most-negative
+-- first since the layout runs north (-z).
+local function roomLight(z)
+    if z <= -104.4 then return vec3(2.6, 3.4, 2.6)      -- end pad: success glow
+    elseif z <= -93.4 then return vec3(3.7, 3.0, 2.1)   -- R8 finale: hot amber
+    elseif z <= -81.4 then return vec3(2.0, 2.3, 2.9)   -- R7 glass: tense dim blue
+    elseif z <= -69.4 then return vec3(2.4, 3.0, 3.0)   -- R6 plate+beam: teal
+    elseif z <= -57.4 then return vec3(2.5, 3.05, 3.05) -- R5 drone intro: cool teal-white
+    elseif z <= -45.4 then return vec3(2.6, 2.7, 2.9)   -- R4 double plate: cool dim
+    elseif z <= -33.4 then return vec3(2.7, 2.75, 2.85) -- R3 throw: neutral-cool
+    elseif z <= -21.4 then return vec3(3.1, 3.0, 2.8)   -- R2 laser: clean warm-white
+    elseif z <= -9.4 then return vec3(3.0, 3.05, 3.2)   -- R1 carry: clean cool
+    else return vec3(3.0, 2.9, 2.7)                     -- tutorial: warm facility
+    end
+end
+local curLight = vec3(3.0, 2.9, 2.7)
 
 local function moveTowards(from, to, maxStep)
     local d = vec3(to.x - from.x, to.y - from.y, to.z - from.z)
@@ -229,6 +254,15 @@ local function droneAt(parkId)
 end
 
 function onUpdate(dt)
+    -- ---- Per-room lighting: ease the key light toward this room's mood so
+    -- crossing a doorway fades colour over ~0.4 s instead of snapping. ----
+    local tgt = roomLight(forge.player.position().z)
+    local k = math.min(dt * 2.5, 1.0)
+    curLight = vec3(curLight.x + (tgt.x - curLight.x) * k,
+                    curLight.y + (tgt.y - curLight.y) * k,
+                    curLight.z + (tgt.z - curLight.z) * k)
+    forge.render.set_light(curLight)
+
     -- ---- Tutorial (bespoke) ----
     local pressedNow = #forge.physics.overlap(plate.center, plate.half) > 0
     if pressedNow ~= plate.pressed then

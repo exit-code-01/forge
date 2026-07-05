@@ -154,6 +154,16 @@ void ScriptEngine::bindScene() {
     sol::table playerTable = forge.create_named("player");
     playerTable.set_function(
         "position", [this]() { return onPlayerPosition ? onPlayerPosition() : glm::vec3(0.0f); });
+
+    // forge.render.set_light(color[, dir]): per-room mood. dir defaults to the
+    // zero vector -> host keeps its current key-light direction.
+    sol::table renderTable = forge.create_named("render");
+    renderTable.set_function(
+        "set_light", [this](const glm::vec3& color, sol::optional<glm::vec3> dir) {
+            if (onSetLighting) {
+                onSetLighting(color, dir.value_or(glm::vec3(0.0f)));
+            }
+        });
 }
 
 void ScriptEngine::bindAudio(Audio& audio) {
@@ -162,6 +172,15 @@ void ScriptEngine::bindAudio(Audio& audio) {
     aud.set_function("play", [&audio](const std::string& path, sol::optional<float> volume) {
         audio.play(path, volume.value_or(1.0f));
     });
+    // Persistent looping voices (ambient room tone, music bed). Returns an
+    // integer handle scripts can revolume or stop; 0 means "not playing".
+    aud.set_function("loop", [&audio](const std::string& path, sol::optional<float> volume) {
+        return audio.playLoop(path, volume.value_or(1.0f)).value;
+    });
+    aud.set_function("set_volume", [&audio](uint32_t handle, float volume) {
+        audio.setVolume(SoundHandle{handle}, volume);
+    });
+    aud.set_function("stop", [&audio](uint32_t handle) { audio.stop(SoundHandle{handle}); });
 }
 
 void ScriptEngine::bindFx(fx::ParticleEmitter& emitter) {

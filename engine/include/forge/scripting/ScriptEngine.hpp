@@ -72,7 +72,12 @@ public:
                        glm::vec3 halfExtents, const std::string& texture, bool dynamic)>
         onSpawnEntity;
     std::function<glm::vec3()> onPlayerPosition;
-    // forge.scene.setPosition/getPosition(name), forge.player.position().
+    // Per-room lighting pass (week 5): scripts set the key-light colour (rgb *
+    // HDR intensity) and direction by room; the host owns the renderer. When
+    // direction is the zero vector the host keeps its current direction.
+    std::function<void(glm::vec3 color, glm::vec3 direction)> onSetLighting;
+    // forge.scene.setPosition/getPosition(name), forge.player.position(),
+    // forge.render.set_light(color, dir).
     void bindScene();
 
     // Protected load/run. Returns false (and logs) on failure; previously

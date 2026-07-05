@@ -239,6 +239,12 @@ struct Renderer::Impl {
     bool needRecreate = false;
     internal::UiRenderHook* uiHook = nullptr; // borrowed; EditorUi outlives its use
 
+    // Per-room lighting (week 5): app-settable key light. Defaults match the
+    // long-standing warm facility key so scenes that never call setLighting()
+    // look exactly as before. Direction is surface -> light.
+    glm::vec3 lightDir = glm::normalize(glm::vec3(0.5f, 0.8f, 0.35f));
+    glm::vec3 lightColor{3.0f, 2.9f, 2.7f}; // rgb * HDR intensity
+
     Impl(Window& win, VulkanContext& ctx) : window(win), context(ctx) {}
 
     void createDepthResources();
@@ -1032,7 +1038,9 @@ void Renderer::drawFrame(const Camera& camera, std::span<const DrawItem> items) 
     // back along the light direction. NO Y-flip here — the shadow map is
     // rendered AND sampled through this same matrix, so the convention
     // cancels out; only the swapchain path needs the flip.
-    const glm::vec3 lightDir = glm::normalize(glm::vec3(0.5f, 0.8f, 0.35f));
+    // Key light comes from Impl (app-settable per room, week 5) — defaults to
+    // the warm facility key if setLighting() was never called.
+    const glm::vec3 lightDir = impl.lightDir;
     // The light frustum FOLLOWS the camera: a fixed origin-centered box left
     // everything beyond its far plane failing the shadow compare (ref > 1.0)
     // -> whole rooms in permanent fake shadow. Texel swim on camera motion is
@@ -1046,7 +1054,7 @@ void Renderer::drawFrame(const Camera& camera, std::span<const DrawItem> items) 
     ubo.lightViewProj = lightProj * lightView;
     ubo.cameraPos = glm::vec4(camera.position, 1.0f);
     ubo.lightDirection = glm::vec4(lightDir, 0.0f);
-    ubo.lightColor = glm::vec4(3.0f, 2.9f, 2.7f, 1.0f); // warm key light, HDR intensity
+    ubo.lightColor = glm::vec4(impl.lightColor, 1.0f); // rgb * HDR intensity
     impl.frameUbos[frame].writeBytes(&ubo, sizeof(ubo));
 
     // Reset the fence only once we know we WILL submit (else: deadlock).
@@ -1101,6 +1109,15 @@ void Renderer::drawFrame(const Camera& camera, std::span<const DrawItem> items) 
 }
 
 void Renderer::setUiHook(internal::UiRenderHook* hook) { m_impl->uiHook = hook; }
+
+void Renderer::setLighting(glm::vec3 color, glm::vec3 direction) {
+    m_impl->lightColor = color;
+    // A zero direction means "keep the current angle" — retint without
+    // re-specifying geometry. Normalize here so callers pass a raw direction.
+    if (glm::dot(direction, direction) > 1e-6f) {
+        m_impl->lightDir = glm::normalize(direction);
+    }
+}
 
 namespace internal {
 RendererVkInfo queryVkInfo(const Renderer& renderer) {
