@@ -509,3 +509,29 @@ back-filled from ADRs 018-024 so the ledger is complete, with the three
 open gaps (kinematic platform, HDR+emissive, skeletal animation) costed.
 resetGame retints explicitly — clearing latches skips the change
 handlers, so green would otherwise survive a restart.
+
+## ADR-026 — VAULT week 10 (ship): settings, save/continue — and what got cut
+
+The prompt's ship-week list is menus, settings (resolution/quality/
+rebinding), checkpoints/save, soft hints. Menus (week 6) and soft hints
+(week 7 objective lines) already exist, so week 10 is settings + save.
+SETTINGS ship as the three knobs a player of THIS game actually reaches
+for — mouse sensitivity, invert Y, master volume — living in the pause
+menu, persisted to a deliberately dumb settings.ini (key=value, no
+sections, unknown keys ignored, malformed values keep defaults: settings
+must never crash the game). Resolution/quality pickers and key rebinding
+are CUT with reasons: the renderer has no quality tiers to pick between,
+the window is freely resizable already, and rebinding is an input-layer
+week the schedule spends better on feel — logged as scope debt, revisit
+only if playtesters ask. One engine seam: Audio::setMasterVolume (the
+mixer's one missing knob; per-voice volumes compose on top).
+SAVE/CONTINUE rides the existing checkpoint ladder instead of inventing a
+save system: the script tracks 'furthest' (curCp rewinds on restart,
+furthest never does), reports new bests through forge.game.save_checkpoint
+-> the host persists it in the same ini and offers Continue (button + C)
+on the title, which calls the script's resumeAt(n). The split is
+deliberate: the SCRIPT owns what a checkpoint number means, the HOST only
+stores it. Resuming is safe-by-construction because every room is
+self-contained (its crates spawn in-room) — a fresh-state run that starts
+deep, no latch replay. Continue does not reset furthest; Restart does not
+erase it — "my best run" survives both.

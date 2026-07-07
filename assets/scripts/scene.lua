@@ -111,6 +111,9 @@ for _, nz in ipairs({ -9.4, -21.4, -33.4, -45.4, -57.4, -69.4, -81.4, -93.4,
     checkpoints[#checkpoints + 1] = { z = nz, pos = vec3(0, 1.5, nz - 1.6) }
 end
 local curCp = 1
+-- Run progress (week 10): 'furthest' is what the host persists. curCp rewinds
+-- on restart/respawn; furthest never does — Continue means "my best run".
+local furthest = 1
 local state = { plates = {}, lasers = {} } -- id -> pressed/blocked
 local function plateOn(id) return state.plates[id] == true end
 local function beamCut(id) return state.lasers[id] == true end
@@ -446,12 +449,30 @@ local function respawnPlayer()
     forge.log("respawn at checkpoint " .. curCp)
 end
 
+-- Continue (week 10): the host calls this with the persisted checkpoint when
+-- the player picks Continue on the title. A fresh-state run that starts deep:
+-- every room is self-contained (its crates spawn in-room), so no latch replay
+-- is needed — warp, sync the ladders, done.
+function resumeAt(cp)
+    curCp = math.max(1, math.min(cp, #checkpoints))
+    if curCp > furthest then
+        furthest = curCp
+    end
+    forge.player.teleport(checkpoints[curCp].pos)
+    forge.audio.play("assets/sounds/chime.wav", 0.6)
+    forge.log("continue: resumed at checkpoint " .. curCp)
+end
+
 local function updateRespawn(p)
     -- Advance the checkpoint as the player crosses each room's near wall.
     while curCp < #checkpoints and p.z <= checkpoints[curCp + 1].z do
         curCp = curCp + 1
         forge.audio.play("assets/sounds/chime.wav", 0.6) -- week 9: reward tone
         forge.log("checkpoint reached (" .. curCp .. ")")
+        if curCp > furthest then -- week 10: report new bests; host persists
+            furthest = curCp
+            forge.game.save_checkpoint(furthest)
+        end
     end
     -- Player fell into a void, or asked for a manual respawn (R).
     if p.y < voidY or forge.input.pressed("r") then

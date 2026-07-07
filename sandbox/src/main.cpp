@@ -32,6 +32,7 @@
 #include <cstdio>
 #include <exception>
 #include <filesystem>
+#include <fstream>
 #include <memory>
 #include <string>
 #include <unordered_map>
@@ -176,6 +177,53 @@ void scriptDemo() {
     if (!ok) {
         throw std::runtime_error("script smoke failed");
     }
+}
+
+// ---- Week 10 (ship): the user's knobs + run progress, one tiny ini.
+// key=value lines, no sections, unknown keys ignored — deliberately dumb.
+struct GameSettings {
+    float mouseSensitivity = 0.14f;
+    bool invertY = false;
+    float masterVolume = 1.0f;
+    int savedCheckpoint = 1; // 1 == the start; >1 offers Continue on the title
+};
+
+constexpr const char* kSettingsPath = "settings.ini";
+
+GameSettings loadSettings(const char* path) {
+    GameSettings s;
+    std::ifstream in(path);
+    std::string line;
+    while (std::getline(in, line)) {
+        const auto eq = line.find('=');
+        if (eq == std::string::npos) {
+            continue;
+        }
+        const std::string key = line.substr(0, eq);
+        const std::string value = line.substr(eq + 1);
+        try {
+            if (key == "sensitivity") {
+                s.mouseSensitivity = std::clamp(std::stof(value), 0.02f, 0.5f);
+            } else if (key == "invert_y") {
+                s.invertY = value == "1";
+            } else if (key == "volume") {
+                s.masterVolume = std::clamp(std::stof(value), 0.0f, 1.0f);
+            } else if (key == "checkpoint") {
+                s.savedCheckpoint = std::max(1, std::stoi(value));
+            }
+        } catch (const std::exception&) {
+            // Malformed value: keep the default. Settings must never crash.
+        }
+    }
+    return s;
+}
+
+void saveSettings(const char* path, const GameSettings& s) {
+    std::ofstream out(path, std::ios::trunc);
+    out << "sensitivity=" << s.mouseSensitivity << "\n"
+        << "invert_y=" << (s.invertY ? 1 : 0) << "\n"
+        << "volume=" << s.masterVolume << "\n"
+        << "checkpoint=" << s.savedCheckpoint << "\n";
 }
 
 // Hot reload (P5.3): poll a file's mtime; on change, run the reload action.
@@ -408,6 +456,10 @@ int main() {
         enum class GameState { Title, Playing, Paused, Won };
         GameState gameState = GameState::Title;
         std::string hudHint; // per-room objective line, set by scene.lua
+
+        // Week 10 (ship): user settings + run progress survive restarts.
+        GameSettings settings = loadSettings(kSettingsPath);
+        audio.setMasterVolume(settings.masterVolume);
         const auto cursorForState = [&]() {
             window.setCursorCaptured(playMode && gameState == GameState::Playing);
         };
@@ -532,6 +584,14 @@ int main() {
         };
         // Objective hint (week 7): the script owns the words, we own the pixels.
         script.onSetHint = [&](const std::string& text) { hudHint = text; };
+        // Save seam (week 10): the script reports the furthest checkpoint;
+        // we persist it. The title menu turns it into a Continue button.
+        script.onSaveCheckpoint = [&](int checkpoint) {
+            if (checkpoint != settings.savedCheckpoint) {
+                settings.savedCheckpoint = checkpoint;
+                saveSettings(kSettingsPath, settings);
+            }
+        };
         script.bindScene();
         script.runFile("assets/scripts/scene.lua");
 
@@ -579,6 +639,13 @@ int main() {
                 gameState = GameState::Playing;
                 cursorForState();
             }
+            // C on the title: continue from the saved checkpoint (week 10).
+            if (playMode && gameState == GameState::Title && settings.savedCheckpoint > 1 &&
+                input.wasKeyPressed(forge::Key::C)) {
+                gameState = GameState::Playing;
+                cursorForState();
+                script.runString("resumeAt(" + std::to_string(settings.savedCheckpoint) + ")");
+            }
             if (input.wasKeyPressed(forge::Key::Tab)) {
                 playMode = !playMode;
                 player.holding = false; // no stale grabs across mode switches
@@ -602,10 +669,12 @@ int main() {
                 // not swing the camera. The look vector is still computed each
                 // frame so the frozen scene renders from the right pose.
                 if (simRun) {
-                    player.yaw += static_cast<float>(input.mouseDeltaX()) * 0.14f;
-                    player.pitch =
-                        std::clamp(player.pitch - static_cast<float>(input.mouseDeltaY()) * 0.14f,
-                                   -89.0f, 89.0f);
+                    const float sens = settings.mouseSensitivity;
+                    const float ySign = settings.invertY ? -1.0f : 1.0f;
+                    player.yaw += static_cast<float>(input.mouseDeltaX()) * sens;
+                    player.pitch = std::clamp(
+                        player.pitch - static_cast<float>(input.mouseDeltaY()) * sens * ySign,
+                        -89.0f, 89.0f);
                 }
                 const float py = glm::radians(player.yaw);
                 const float pp = glm::radians(player.pitch);
@@ -790,17 +859,27 @@ int main() {
                     if (gameState == GameState::Title) {
                         ImGui::TextUnformatted("VAULT");
                         ImGui::Separator();
-                        ImGui::TextWrapped("A physics puzzle in eight rooms. Carry crates, "
+                        ImGui::TextWrapped("A physics puzzle in ten rooms. Carry crates, "
                                            "weigh down plates, break the glass, reach the exit.");
                         ImGui::Spacing();
                         if (ImGui::Button("Play", {-1.0f, 0.0f})) {
                             startRun(false);
                         }
+                        // Saved progress (week 10): resume the run where the
+                        // last session's furthest checkpoint left off.
+                        if (settings.savedCheckpoint > 1 &&
+                            ImGui::Button("Continue", {-1.0f, 0.0f})) {
+                            startRun(false);
+                            script.runString("resumeAt(" +
+                                             std::to_string(settings.savedCheckpoint) + ")");
+                        }
                         if (ImGui::Button("Quit", {-1.0f, 0.0f})) {
                             window.requestClose();
                         }
                         ImGui::Spacing();
-                        ImGui::TextDisabled("ENTER play   ESC quit");
+                        ImGui::TextDisabled(settings.savedCheckpoint > 1
+                                                ? "ENTER play   C continue   ESC quit"
+                                                : "ENTER play   ESC quit");
                     } else if (gameState == GameState::Paused) {
                         ImGui::TextUnformatted("Paused");
                         ImGui::Separator();
@@ -813,6 +892,23 @@ int main() {
                         }
                         if (ImGui::Button("Quit", {-1.0f, 0.0f})) {
                             window.requestClose();
+                        }
+                        // Settings (week 10): the shippable three. Resolution/
+                        // quality/rebinding are scope-cut with reasons (ADR-026).
+                        ImGui::Spacing();
+                        ImGui::TextDisabled("Settings");
+                        ImGui::Separator();
+                        bool changed = false;
+                        changed |= ImGui::SliderFloat("sensitivity", &settings.mouseSensitivity,
+                                                      0.05f, 0.35f, "%.2f");
+                        changed |= ImGui::Checkbox("invert Y", &settings.invertY);
+                        if (ImGui::SliderFloat("volume", &settings.masterVolume, 0.0f, 1.0f,
+                                               "%.2f")) {
+                            audio.setMasterVolume(settings.masterVolume);
+                            changed = true;
+                        }
+                        if (changed) {
+                            saveSettings(kSettingsPath, settings);
                         }
                         ImGui::Spacing();
                         ImGui::TextDisabled("ESC resume");

@@ -178,6 +178,13 @@ void ScriptEngine::bindScene() {
             onWin();
         }
     });
+    // forge.game.save_checkpoint(n): persist run progress (week 10). The host
+    // writes it to disk; on the next launch the title menu offers Continue.
+    gameTable.set_function("save_checkpoint", [this](int checkpoint) {
+        if (onSaveCheckpoint) {
+            onSaveCheckpoint(checkpoint);
+        }
+    });
 
     // forge.render.set_light(color[, dir]): per-room mood. dir defaults to the
     // zero vector -> host keeps its current key-light direction.

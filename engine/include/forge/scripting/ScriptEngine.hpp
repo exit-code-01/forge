@@ -83,6 +83,10 @@ public:
     // Run complete (week 6): the script fires this once the finale is cleared
     // so the host can raise the win screen. Host owns the menu/game state.
     std::function<void()> onWin;
+    // Save seam (week 10): the script reports the furthest checkpoint; the
+    // host persists it (settings.ini) and offers Continue on the title menu.
+    // The SCRIPT owns what a checkpoint number means; the host just stores it.
+    std::function<void(int checkpoint)> onSaveCheckpoint;
     // Per-room lighting pass (week 5): scripts set the key-light colour (rgb *
     // HDR intensity) and direction by room; the host owns the renderer. When
     // direction is the zero vector the host keeps its current direction.

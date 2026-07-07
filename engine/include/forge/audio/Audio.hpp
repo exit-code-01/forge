@@ -50,6 +50,10 @@ public:
     void setVolume(SoundHandle handle, float volume);
     void stop(SoundHandle handle);
 
+    // Master gain over every voice (week 10 settings menu). Per-voice
+    // volumes still apply on top — this is the user's one knob.
+    void setMasterVolume(float volume);
+
     // Reaps finished one-shot voices. Call once per frame; cheap and safe
     // when disabled. (Loops persist until stop().)
     void update();

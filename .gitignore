@@ -15,6 +15,9 @@ build-*/
 .idea/
 CMakeUserPresets.json
 
+# Runtime-generated user settings (VAULT week 10)
+/settings.ini
+
 # OS junk
 .DS_Store
 Thumbs.db

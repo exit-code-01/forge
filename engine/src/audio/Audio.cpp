@@ -74,6 +74,12 @@ Audio::~Audio() {
 
 bool Audio::available() const { return m_impl->ok; }
 
+void Audio::setMasterVolume(float volume) {
+    if (m_impl->ok) {
+        ma_engine_set_volume(&m_impl->engine, volume);
+    }
+}
+
 void Audio::play(const std::string& path, float volume) {
     if (!m_impl->ok) {
         return;
