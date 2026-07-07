@@ -15,6 +15,9 @@ filled from the ADR log so the ledger is complete.
 | 6    | Win signal from script | `forge.game.win()` -> host raises the menu | 0.1 d |
 | 7    | Objective hints on the HUD | `forge.hud.set_hint(text)`; host draws top-centred | 0.25 d |
 | 9    | Colour language (orange/red/green law) | `forge.scene.setTexture(name, texture)` + host texture registry | 0.25 d |
+| 11   | Real prop/character meshes from Lua | model registry (every `assets/models/*.obj` by stem) + optional `mesh` arg on `forge.scene.spawn` | 0.5 d |
+| 11   | Character orientation (SPARK banking, viewmodel) | `forge.scene.setRotation(name, eulerDeg)` — visual-only, colliders stay axis-aligned | 0.25 d |
+| 11   | Rotation curves for rigid-rig animation | `anim::Clip::eulerKeys` + `sampleEuler` (glove throw/grab clips consume them) | 0.25 d |
 
 ## Closed in Lua (no engine change needed)
 
@@ -35,6 +38,10 @@ filled from the ADR log so the ledger is complete.
   bar and the REAL carrier of the colour language (emissive light strips
   instead of tinted albedo). Texture swaps are the stand-in until this
   lands. Est: 3–4 d, an ENGINE-week on its own.
-- **Skeletal animation + blending** — required for UNIT-7 arms / SPARK rig /
-  finale character from the expanded prompt. Deliberately deferred (ADR-020):
-  nothing to skin until an art pass exists. Est: 5+ d.
+- **Skeletal animation + blending** — the expanded prompt's UNIT-7 arms /
+  SPARK rig / finale character driver. The week-11 art pass (ADR-027)
+  answered all three needs with RIGID rigs (multi-part entities +
+  setRotation + euler clips) because every VAULT character is a machine —
+  so this gap now needs an ORGANIC character to justify it, and none is
+  planned. Deferred with evidence (was: deferred on a hunch, ADR-020).
+  Est: 5+ d.

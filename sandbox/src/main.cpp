@@ -297,18 +297,30 @@ int main() {
         forge::TextureHandle concreteTexture{};
         forge::TextureHandle floorTexture{};
         forge::TextureHandle metalTexture{};
-        // Script-facing texture registry: scene.lua spawns and RETINTS by
-        // name (colour language, week 9). The host owns what a name means.
+        // Script-facing registries: scene.lua spawns MESHES and retints
+        // TEXTURES by name (colour language, week 9; model registry,
+        // ADR-027). The host owns what a name means.
+        std::unordered_map<std::string, forge::MeshHandle> meshByName;
         std::unordered_map<std::string, forge::TextureHandle> textureByName;
         if (renderer) {
             std::vector<forge::Vertex> vertices;
             std::vector<uint32_t> indices;
             buildCube(vertices, indices);
             cubeMesh = renderer->addMesh(vertices, indices);
+            meshByName["cube"] = cubeMesh;
 
             // The import path, end to end: file -> CPU data -> GPU handles.
-            const auto torusData = forge::assets::loadMesh("assets/models/torus.obj");
-            torusMesh = renderer->addMesh(torusData.vertices, torusData.indices);
+            // Every OBJ in assets/models/ is spawnable by its filename stem
+            // (ADR-027) — new gen_models.py output lands with no host edits.
+            for (const auto& entry : std::filesystem::directory_iterator("assets/models")) {
+                if (entry.path().extension() != ".obj") {
+                    continue;
+                }
+                const auto data = forge::assets::loadMesh(entry.path().string());
+                meshByName[entry.path().stem().string()] =
+                    renderer->addMesh(data.vertices, data.indices);
+            }
+            torusMesh = meshByName.at("torus"); // the P5 hot-reload demo mesh
             const auto crateImage = forge::assets::loadImage("assets/textures/crate.png");
             crateTexture =
                 renderer->addTexture(crateImage.width, crateImage.height, crateImage.rgba);
@@ -328,12 +340,13 @@ int main() {
             metalTexture =
                 renderer->addTexture(metalImage.width, metalImage.height, metalImage.rgba);
 
-            textureByName = {{"crate", crateTexture},       {"laser", laserTexture},
-                             {"glass", glassTexture},       {"concrete", concreteTexture},
-                             {"floor", floorTexture},       {"metal", metalTexture}};
+            textureByName = {{"crate", crateTexture}, {"laser", laserTexture},
+                             {"glass", glassTexture}, {"concrete", concreteTexture},
+                             {"floor", floorTexture}, {"metal", metalTexture}};
             // Colour-language tints (week 9): red = locked, green = solved,
-            // orange = interactable. Script-only names, no dedicated handles.
-            for (const char* name : {"metal_red", "metal_green", "metal_orange"}) {
+            // orange = interactable, blue = SPARK/drone (week 11).
+            // Script-only names, no dedicated handles.
+            for (const char* name : {"metal_red", "metal_green", "metal_orange", "metal_blue"}) {
                 const auto img =
                     forge::assets::loadImage(std::string("assets/textures/") + name + ".png");
                 textureByName[name] = renderer->addTexture(img.width, img.height, img.rgba);
@@ -370,6 +383,16 @@ int main() {
 
         // ---- VAULT week 1: the grey-box tutorial room. Floor top at y=0.
         const auto checker = forge::Renderer::defaultTexture();
+        // Week 11 art pass: fixtures resolve real meshes; anything not in the
+        // registry (or a renderer-less run) falls back to the unit cube.
+        const auto meshOr = [&](const std::string& name) {
+            const auto it = meshByName.find(name);
+            return it != meshByName.end() ? it->second : cubeMesh;
+        };
+        const auto texOr = [&](const std::string& name) {
+            const auto it = textureByName.find(name);
+            return it != textureByName.end() ? it->second : checker;
+        };
         spawnEntity("Floor", {0.0f, -0.2f, 0.0f}, {14.0f, 0.4f, 14.0f}, cubeMesh, concreteTexture,
                     {7.0f, 0.2f, 7.0f}, false);
         // North wall has the DOORWAY: two segments + a sliding Exit Door.
@@ -381,8 +404,8 @@ int main() {
                     concreteTexture, {1.1f, 0.4f, 0.2f}, false);
         // Door is 0.32 thick vs the 0.4 wall: recessed 4 cm in its frame so an
         // OPEN door's faces never sit coplanar with "Wall N Top" (z-fighting).
-        spawnEntity("Exit Door", {0.0f, 1.25f, -7.2f}, {2.2f, 2.5f, 0.32f}, cubeMesh, crateTexture,
-                    {1.1f, 1.25f, 0.16f}, false);
+        spawnEntity("Exit Door", {0.0f, 1.25f, -7.2f}, {2.2f, 2.5f, 0.32f}, meshOr("door"),
+                    crateTexture, {1.1f, 1.25f, 0.16f}, false);
         spawnEntity("Exit Pad", {0.0f, -0.2f, -8.6f}, {3.0f, 0.4f, 2.6f}, cubeMesh, concreteTexture,
                     {1.5f, 0.2f, 1.3f}, false);
         // Glass pane just behind the exit door: throw a crate through it.
@@ -390,9 +413,9 @@ int main() {
                     {1.1f, 1.05f, 0.06f}, false);
         // Laser circuit across the room at chest height (indicator for now;
         // rooms 1-3 wire it into puzzles). Beam is visual-only, Lua-driven.
-        spawnEntity("Laser Emitter", {-6.9f, 1.1f, -5.0f}, {0.3f, 0.3f, 0.3f}, cubeMesh,
+        spawnEntity("Laser Emitter", {-6.9f, 1.1f, -5.0f}, {0.3f, 0.3f, 0.3f}, meshOr("emitter"),
                     laserTexture, {0.15f, 0.15f, 0.15f}, false);
-        spawnEntity("Laser Receiver", {6.9f, 1.1f, -5.0f}, {0.3f, 0.3f, 0.3f}, cubeMesh,
+        spawnEntity("Laser Receiver", {6.9f, 1.1f, -5.0f}, {0.3f, 0.3f, 0.3f}, meshOr("receiver"),
                     laserTexture, {0.15f, 0.15f, 0.15f}, false);
         spawnEntity("Laser Beam", {0.0f, 1.1f, -5.0f}, {13.2f, 0.05f, 0.05f}, cubeMesh,
                     laserTexture, glm::vec3(0.0f), false); // no collider
@@ -408,17 +431,23 @@ int main() {
         spawnEntity("Ledge", {5.5f, 1.1f, -5.5f}, {3.0f, 2.2f, 3.0f}, cubeMesh, concreteTexture,
                     {1.5f, 1.1f, 1.5f}, false);
         // Throwables — Crate A sits dead ahead of the spawn look direction.
-        spawnEntity("Crate A", {0.0f, 0.4f, 2.5f}, {0.5f, 0.5f, 0.5f}, cubeMesh, crateTexture,
-                    {0.25f, 0.25f, 0.25f}, true, 0.3f);
-        spawnEntity("Crate B", {-1.2f, 0.4f, 1.2f}, {0.5f, 0.5f, 0.5f}, cubeMesh, crateTexture,
-                    {0.25f, 0.25f, 0.25f}, true, 0.3f);
-        spawnEntity("Crate C", {1.3f, 0.4f, 0.8f}, {0.5f, 0.5f, 0.5f}, cubeMesh, crateTexture,
-                    {0.25f, 0.25f, 0.25f}, true, 0.3f);
+        spawnEntity("Crate A", {0.0f, 0.4f, 2.5f}, {0.5f, 0.5f, 0.5f}, meshOr("crate"),
+                    crateTexture, {0.25f, 0.25f, 0.25f}, true, 0.3f);
+        spawnEntity("Crate B", {-1.2f, 0.4f, 1.2f}, {0.5f, 0.5f, 0.5f}, meshOr("crate"),
+                    crateTexture, {0.25f, 0.25f, 0.25f}, true, 0.3f);
+        spawnEntity("Crate C", {1.3f, 0.4f, 0.8f}, {0.5f, 0.5f, 0.5f}, meshOr("crate"),
+                    crateTexture, {0.25f, 0.25f, 0.25f}, true, 0.3f);
         // Tutorial pressure plate (scene.lua animates it sinking) + the mascot.
-        spawnEntity("Plate T", {-3.0f, 0.05f, 2.0f}, {1.4f, 0.1f, 1.4f}, cubeMesh, crateTexture,
-                    {0.7f, 0.05f, 0.7f}, false);
+        spawnEntity("Plate T", {-3.0f, 0.05f, 2.0f}, {1.4f, 0.1f, 1.4f}, meshOr("plate"),
+                    crateTexture, {0.7f, 0.05f, 0.7f}, false);
         spawnEntity("Torus", {-3.5f, 0.27f, -3.5f}, {1.0f, 1.0f, 1.0f}, torusMesh, crateTexture,
                     {0.85f, 0.25f, 0.85f}, false);
+        // UNIT-7's gravity glove (week 11): the first-person viewmodel. No
+        // collider — pure presentation, re-posed every frame from the camera.
+        // Orange by the colour law: the glove IS the interact verb.
+        const auto gloveEntity =
+            spawnEntity("Glove", {0.0f, 1.0f, 5.0f}, {0.8f, 0.8f, 0.8f}, meshOr("glove"),
+                        texOr("metal_orange"), glm::vec3(0.0f), false);
 
         forge::Audio audio;
         forge::fx::ParticleEmitter sparks;
@@ -435,6 +464,38 @@ int main() {
             {7.5f, {3.2f, 0.15f, -5.5f}},
         };
         float animTime = 0.0f;
+
+        // Glove viewmodel clips (week 11): keys live in CAMERA space
+        // (x = right, y = up, z = along look) and both clips end back at
+        // zero, so finishing a clip IS returning to the idle pose. These are
+        // the first consumers of Clip's euler rotation curves (ADR-027).
+        forge::anim::Clip gloveThrowClip;
+        gloveThrowClip.positionKeys = {
+            {0.0f, {0.0f, 0.0f, 0.0f}},
+            {0.07f, {0.0f, 0.02f, 0.17f}},    // punch out with the release
+            {0.17f, {0.0f, -0.015f, -0.05f}}, // recoil past neutral
+            {0.34f, {0.0f, 0.0f, 0.0f}},
+        };
+        gloveThrowClip.eulerKeys = {
+            {0.0f, {0.0f, 0.0f, 0.0f}},
+            {0.07f, {-16.0f, 0.0f, 0.0f}}, // wrist snaps down with the punch
+            {0.19f, {8.0f, 0.0f, -5.0f}},  // overshoot up, a hint of roll
+            {0.34f, {0.0f, 0.0f, 0.0f}},
+        };
+        forge::anim::Clip gloveGrabClip;
+        gloveGrabClip.positionKeys = {
+            {0.0f, {0.0f, 0.0f, 0.0f}},
+            {0.08f, {0.0f, -0.02f, -0.08f}}, // pull back toward the chest
+            {0.22f, {0.0f, 0.0f, 0.0f}},
+        };
+        gloveGrabClip.eulerKeys = {
+            {0.0f, {0.0f, 0.0f, 0.0f}},
+            {0.08f, {11.0f, 0.0f, 4.0f}}, // wrist cocks up around the catch
+            {0.22f, {0.0f, 0.0f, 0.0f}},
+        };
+        const forge::anim::Clip* gloveClip = nullptr;
+        float gloveClipTime = 0.0f;
+        float gloveSwayTime = 0.0f;
 
         // ---- The player: capsule controller + first-person camera.
         physics.createCharacter({0.0f, 1.0f, 5.0f}, 0.35f, 0.55f);
@@ -536,6 +597,14 @@ int main() {
                 scene.get<TransformC>(e).scale = sc;
             }
         };
+        // Character/prop orientation (ADR-027): visual transform only —
+        // colliders stay axis-aligned, so scripts rotate colliderless parts.
+        script.onSetEntityRotation = [&](const std::string& name, glm::vec3 eulerDeg) {
+            const auto e = findByName(name);
+            if (scene.alive(e)) {
+                scene.get<TransformC>(e).eulerDeg = eulerDeg;
+            }
+        };
         script.onDestroyEntity = [&](const std::string& name) {
             const auto e = findByName(name);
             if (!scene.alive(e)) {
@@ -548,10 +617,12 @@ int main() {
             scene.destroy(e);
         };
         script.onSpawnEntity = [&](const std::string& name, glm::vec3 pos, glm::vec3 sc,
-                                   glm::vec3 half, const std::string& texture, bool dynamic) {
+                                   glm::vec3 half, const std::string& texture, bool dynamic,
+                                   const std::string& mesh) {
             const auto it = textureByName.find(texture);
-            spawnEntity(name, pos, sc, cubeMesh, it != textureByName.end() ? it->second : checker,
-                        half, dynamic, 0.4f);
+            const auto mi = meshByName.find(mesh);
+            spawnEntity(name, pos, sc, mi != meshByName.end() ? mi->second : cubeMesh,
+                        it != textureByName.end() ? it->second : checker, half, dynamic, 0.4f);
         };
         // Colour language (week 9): scripts retint by name — doors flip
         // red/green, plates orange/green. Unknown names are a no-op.
@@ -748,6 +819,8 @@ int main() {
                         player.holding = false;
                         audio.play("assets/sounds/throw.wav");
                         sparks.burst(eye + look * 1.2f, 12);
+                        gloveClip = &gloveThrowClip; // viewmodel punches with it
+                        gloveClipTime = 0.0f;
                     } else if (const auto hit = physics.raycast(eye, look, 3.5f)) {
                         const auto it = bodyToEntity.find(hit->body.value);
                         auto* bc =
@@ -756,6 +829,8 @@ int main() {
                             player.held = hit->body;
                             player.holding = true;
                             audio.play("assets/sounds/grab.wav");
+                            gloveClip = &gloveGrabClip; // wrist catch on the pull
+                            gloveClipTime = 0.0f;
                             FORGE_INFO("glove: grabbed {}", scene.get<Name>(it->second).value);
                         } else {
                             FORGE_INFO("glove: hit body {} (not grabbable)", hit->body.value);
@@ -766,8 +841,7 @@ int main() {
                             eye.x, eye.y, eye.z, look.x, look.y, look.z);
                     }
                 }
-                if (simRun && player.holding &&
-                    input.wasMousePressed(forge::MouseButton::Right)) {
+                if (simRun && player.holding && input.wasMousePressed(forge::MouseButton::Right)) {
                     physics.setLinearVelocity(player.held, {0.0f, 0.0f, 0.0f}); // gentle drop
                     player.holding = false;
                     audio.play("assets/sounds/grab.wav"); // same blip, release direction
@@ -784,6 +858,42 @@ int main() {
                         springVel *= 14.0f / springLen;
                     }
                     physics.setLinearVelocity(player.held, springVel);
+                }
+
+                // ---- UNIT-7's glove rides the camera (week 11). Offsets are
+                // camera-space (right/up/look); the throw/grab clips add their
+                // sampled position + euler curves on top of the base pose.
+                {
+                    const glm::vec3 upv = glm::normalize(glm::cross(right, look));
+                    const bool walking =
+                        simRun && physics.characterGrounded() &&
+                        (input.isKeyDown(forge::Key::W) || input.isKeyDown(forge::Key::A) ||
+                         input.isKeyDown(forge::Key::S) || input.isKeyDown(forge::Key::D));
+                    if (simRun) {
+                        // Sway keeps a faint pulse at rest — a robot idles too.
+                        gloveSwayTime += dt * (walking ? 1.0f : 0.35f);
+                        gloveClipTime += dt;
+                    }
+                    const float swayAmp = walking ? 1.0f : 0.35f;
+                    glm::vec3 off = player.holding
+                                        ? glm::vec3(0.24f, -0.2f, 0.68f) // reach toward the load
+                                        : glm::vec3(0.28f, -0.26f, 0.62f);
+                    off.x += std::cos(gloveSwayTime * 3.6f) * 0.008f * swayAmp;
+                    off.y += std::sin(gloveSwayTime * 7.2f) * 0.010f * swayAmp;
+                    glm::vec3 clipEuler{0.0f};
+                    if (gloveClip != nullptr) {
+                        off += gloveClip->samplePosition(gloveClipTime, false);
+                        clipEuler = gloveClip->sampleEuler(gloveClipTime, false);
+                        if (gloveClipTime >= gloveClip->duration()) {
+                            gloveClip = nullptr; // clips end at zero == idle pose
+                        }
+                    }
+                    auto& gt = scene.get<TransformC>(gloveEntity);
+                    gt.position = eye + right * off.x + upv * off.y + look * off.z;
+                    // Resting pose leans a few degrees in and down — a hand at
+                    // ease, not a rifle sight. Clip curves add on top.
+                    gt.eulerDeg =
+                        glm::vec3(player.pitch - 4.0f, -player.yaw - 10.0f, 0.0f) + clipEuler;
                 }
             } else {
                 // ---- Editor orbit camera (unchanged from P7).

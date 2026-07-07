@@ -87,9 +87,8 @@ void Audio::play(const std::string& path, float volume) {
     // A self-owned voice with its OWN volume — overlapping plays mix, and one
     // quiet SFX no longer drags the whole mix down (the old master-volume bug).
     auto snd = std::make_unique<ma_sound>();
-    const ma_result r =
-        ma_sound_init_from_file(&m_impl->engine, path.c_str(), MA_SOUND_FLAG_DECODE, nullptr,
-                                nullptr, snd.get());
+    const ma_result r = ma_sound_init_from_file(&m_impl->engine, path.c_str(), MA_SOUND_FLAG_DECODE,
+                                                nullptr, nullptr, snd.get());
     if (r != MA_SUCCESS) {
         FORGE_WARN("audio: failed to load {} (result {})", path, static_cast<int>(r));
         return;
@@ -105,9 +104,8 @@ SoundHandle Audio::playLoop(const std::string& path, float volume) {
     }
     auto snd = std::make_unique<ma_sound>();
     // STREAM: ambient/music are long; don't decode minutes of audio into RAM.
-    const ma_result r =
-        ma_sound_init_from_file(&m_impl->engine, path.c_str(), MA_SOUND_FLAG_STREAM, nullptr,
-                                nullptr, snd.get());
+    const ma_result r = ma_sound_init_from_file(&m_impl->engine, path.c_str(), MA_SOUND_FLAG_STREAM,
+                                                nullptr, nullptr, snd.get());
     if (r != MA_SUCCESS) {
         FORGE_WARN("audio: failed to load loop {} (result {})", path, static_cast<int>(r));
         return {};

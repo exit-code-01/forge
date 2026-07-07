@@ -139,25 +139,36 @@ void ScriptEngine::bindScene() {
             onSetEntityScale(name, scale);
         }
     });
+    // forge.scene.setRotation(name, eulerDeg): character/prop orientation
+    // (ADR-027). Visual transform only — colliders stay axis-aligned.
+    sceneTable.set_function("setRotation",
+                            [this](const std::string& name, const glm::vec3& eulerDeg) {
+                                if (onSetEntityRotation) {
+                                    onSetEntityRotation(name, eulerDeg);
+                                }
+                            });
     // forge.scene.setTexture(name, texture): the colour-language seam (week
     // 9) — doors flip red/green, plates orange/green. Texture names resolve
     // host-side; unknown names are ignored there.
-    sceneTable.set_function("setTexture", [this](const std::string& name,
-                                                 const std::string& texture) {
-        if (onSetEntityTexture) {
-            onSetEntityTexture(name, texture);
-        }
-    });
+    sceneTable.set_function("setTexture",
+                            [this](const std::string& name, const std::string& texture) {
+                                if (onSetEntityTexture) {
+                                    onSetEntityTexture(name, texture);
+                                }
+                            });
     sceneTable.set_function("destroy", [this](const std::string& name) {
         if (onDestroyEntity) {
             onDestroyEntity(name);
         }
     });
+    // spawn(..., dynamic[, mesh]): mesh is optional so every existing call
+    // site keeps meaning "unit cube" (ADR-027 — the model registry seam).
     sceneTable.set_function("spawn", [this](const std::string& name, const glm::vec3& position,
                                             const glm::vec3& scale, const glm::vec3& halfExtents,
-                                            const std::string& texture, bool dynamic) {
+                                            const std::string& texture, bool dynamic,
+                                            sol::optional<std::string> mesh) {
         if (onSpawnEntity) {
-            onSpawnEntity(name, position, scale, halfExtents, texture, dynamic);
+            onSpawnEntity(name, position, scale, halfExtents, texture, dynamic, mesh.value_or(""));
         }
     });
     sol::table playerTable = forge.create_named("player");
@@ -189,12 +200,12 @@ void ScriptEngine::bindScene() {
     // forge.render.set_light(color[, dir]): per-room mood. dir defaults to the
     // zero vector -> host keeps its current key-light direction.
     sol::table renderTable = forge.create_named("render");
-    renderTable.set_function(
-        "set_light", [this](const glm::vec3& color, sol::optional<glm::vec3> dir) {
-            if (onSetLighting) {
-                onSetLighting(color, dir.value_or(glm::vec3(0.0f)));
-            }
-        });
+    renderTable.set_function("set_light",
+                             [this](const glm::vec3& color, sol::optional<glm::vec3> dir) {
+                                 if (onSetLighting) {
+                                     onSetLighting(color, dir.value_or(glm::vec3(0.0f)));
+                                 }
+                             });
 
     // forge.hud.set_hint(text): the per-room objective line (week 7). The
     // script decides the words; the host draws them. "" clears the hint.

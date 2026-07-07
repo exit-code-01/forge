@@ -82,6 +82,9 @@ def main() -> None:
     metal("metal_red.png", (62, -28, -38))
     metal("metal_green.png", (-30, 56, -28))
     metal("metal_orange.png", (68, 20, -52))
+    # blue = SPARK/drone (week 11 character pass). Appended LAST so the rng
+    # stream keeps every earlier texture byte-identical.
+    metal("metal_blue.png", (-26, 6, 66))
 
 
 if __name__ == "__main__":

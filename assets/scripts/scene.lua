@@ -157,9 +157,11 @@ local drone = {
 }
 
 -- ---- Room construction ----------------------------------------------------
-local function box(name, pos, scale, tex, solid, dynamic)
+-- mesh (optional, week 11): a model-registry name; nil means the unit cube.
+-- Models are authored in unit bounds, so scale keeps meaning what it meant.
+local function box(name, pos, scale, tex, solid, dynamic, mesh)
     local half = solid and vec3(scale.x * 0.5, scale.y * 0.5, scale.z * 0.5) or vec3(0, 0, 0)
-    forge.scene.spawn(name, pos, scale, half, tex, dynamic or false)
+    forge.scene.spawn(name, pos, scale, half, tex, dynamic or false, mesh)
 end
 
 local function shell(id, z0, z1, w) -- floor + side walls (z0 > z1)
@@ -184,8 +186,8 @@ local function corridor(id, z0) -- 2m long, walls FLUSH with the 2.2m frames
 end
 
 local function laserRig(n, z)
-    box("Emitter " .. n, vec3(-4.6, 1.1, z), vec3(0.3, 0.3, 0.3), "laser", true)
-    box("Receiver " .. n, vec3(4.6, 1.1, z), vec3(0.3, 0.3, 0.3), "laser", true)
+    box("Emitter " .. n, vec3(-4.6, 1.1, z), vec3(0.3, 0.3, 0.3), "laser", true, false, "emitter")
+    box("Receiver " .. n, vec3(4.6, 1.1, z), vec3(0.3, 0.3, 0.3), "laser", true, false, "receiver")
     box("Beam " .. n, vec3(0, 1.1, z), vec3(8.8, 0.05, 0.05), "laser", false)
 end
 
@@ -198,7 +200,7 @@ local function buildRelayRing()
     shell("R9", -105.4, -119.4, 14)
     framedWall("R9 NearWall", -105.4, 14)
     framedWall("R9 FarWall", -119.4, 14)
-    box("Door 9", vec3(0, 1.25, -119.4), vec3(2.2, 2.5, 0.32), "metal_red", true)
+    box("Door 9", vec3(0, 1.25, -119.4), vec3(2.2, 2.5, 0.32), "metal_red", true, false, "door")
     -- centre block seals the east side: the path is S lane -> W lane -> N lane
     box("R9 Block", vec3(2.4, 1.6, -112.4), vec3(8.8, 3.6, 4.0), "concrete", true)
     for gi, gz in ipairs({ -110.4, -114.4 }) do -- gated dividers across the W lane
@@ -207,11 +209,13 @@ local function buildRelayRing()
         box(id .. " E", vec3(-2.8, 1.6, gz), vec3(1.6, 3.6, 0.4), "concrete", true)
         box(id .. " Top", vec3(-4.4, 3.0, gz), vec3(1.6, 0.8, 0.4), "concrete", true)
         box("Gate 9" .. (gi == 1 and "a" or "b"), vec3(-4.4, 1.25, gz), vec3(1.6, 2.5, 0.32),
-            "metal_red", true)
+            "metal_red", true, false, "door")
     end
     for _, r in ipairs({ { "r1", -108.0, 6.6 }, { "r2", -112.4, -2.2 }, { "r3", -117.0, 6.6 } }) do
-        box("Emitter " .. r[1], vec3(-6.6, 0.35, r[2]), vec3(0.3, 0.3, 0.3), "laser", true)
-        box("Receiver " .. r[1], vec3(r[3], 0.35, r[2]), vec3(0.3, 0.3, 0.3), "laser", true)
+        box("Emitter " .. r[1], vec3(-6.6, 0.35, r[2]), vec3(0.3, 0.3, 0.3), "laser", true,
+            false, "emitter")
+        box("Receiver " .. r[1], vec3(r[3], 0.35, r[2]), vec3(0.3, 0.3, 0.3), "laser", true,
+            false, "receiver")
         box("Beam " .. r[1], vec3(0, 0.35, r[2]), vec3(1.0, 0.05, 0.05), "laser", false)
     end
     corridor("Cor9", -119.4)
@@ -225,21 +229,21 @@ local function buildAtrium()
     shell("R10", -121.4, -137.4, 16)
     framedWall("R10 NearWall", -121.4, 16)
     framedWall("R10 FarWall", -137.4, 16)
-    box("Door 10", vec3(0, 1.25, -137.4), vec3(2.2, 2.5, 0.32), "metal_red", true)
+    box("Door 10", vec3(0, 1.25, -137.4), vec3(2.2, 2.5, 0.32), "metal_red", true, false, "door")
     -- Wing W (x -8..-4): cage opened by sustained weight on p10w (drone/crate)
     box("Wing W N", vec3(-6, 1.6, -131.0), vec3(4, 3.6, 0.4), "concrete", true)
     box("Wing W S", vec3(-6, 1.6, -126.0), vec3(4, 3.6, 0.4), "concrete", true)
     box("Wing W E1", vec3(-4, 1.6, -130.15), vec3(0.4, 3.6, 1.7), "concrete", true)
     box("Wing W E2", vec3(-4, 1.6, -126.85), vec3(0.4, 3.6, 1.7), "concrete", true)
     box("Wing W Top", vec3(-4, 3.0, -128.5), vec3(0.4, 0.8, 1.6), "concrete", true)
-    box("Cage W", vec3(-4, 1.25, -128.5), vec3(0.32, 2.5, 1.6), "metal_red", true)
+    box("Cage W", vec3(-4, 1.25, -128.5), vec3(0.32, 2.5, 1.6), "metal_red", true, false, "door")
     -- Wing E (x 4..8): timed cage — body-press p10e and sprint
     box("Wing E N", vec3(6, 1.6, -133.0), vec3(4, 3.6, 0.4), "concrete", true)
     box("Wing E S", vec3(6, 1.6, -128.0), vec3(4, 3.6, 0.4), "concrete", true)
     box("Wing E W1", vec3(4, 1.6, -132.15), vec3(0.4, 3.6, 1.7), "concrete", true)
     box("Wing E W2", vec3(4, 1.6, -128.85), vec3(0.4, 3.6, 1.7), "concrete", true)
     box("Wing E Top", vec3(4, 3.0, -130.5), vec3(0.4, 0.8, 1.6), "concrete", true)
-    box("Cage E", vec3(4, 1.25, -130.5), vec3(0.32, 2.5, 1.6), "metal_red", true)
+    box("Cage E", vec3(4, 1.25, -130.5), vec3(0.32, 2.5, 1.6), "metal_red", true, false, "door")
     -- Wing N (NW corner): crate behind an x-thin glass window
     box("Wing N S", vec3(-6, 1.6, -133.4), vec3(4, 3.6, 0.4), "concrete", true)
     box("Wing N E1", vec3(-4, 1.6, -136.95), vec3(0.4, 3.6, 0.9), "concrete", true)
@@ -261,13 +265,14 @@ local function buildRooms()
         framedWall(id .. " FarWall", z0 - 10)
         -- 0.32 thick vs the 0.4 frame: recessed 4 cm so an OPEN door's faces
         -- never sit coplanar with the frame's top piece (z-fighting fix).
-        box("Door " .. i, vec3(0, 1.25, z0 - 10), vec3(2.2, 2.5, 0.32), "metal_red", true)
+        box("Door " .. i, vec3(0, 1.25, z0 - 10), vec3(2.2, 2.5, 0.32), "metal_red", true,
+            false, "door")
         corridor("Cor" .. i, z0 - 10) -- Cor8 now leads on to R9 (week 8)
     end
     -- plates (visual slabs; logic reads the plates2 regions)
     for _, pl in ipairs(plates2) do
         box("Plate " .. pl.id, vec3(pl.center.x, 0.1, pl.center.z), vec3(1.4, 0.2, 1.4),
-            "metal_orange", true)
+            "metal_orange", true, false, "plate")
     end
     -- room contents (fixtures here; crates spawn from roomCrates below)
     laserRig(2, -26.0)
@@ -282,7 +287,7 @@ local function buildRooms()
     -- tutorial crates A/B/C — the room ids start at R).
     for _, c in ipairs(roomCrates) do
         if c.name:sub(1, 7) == "Crate R" then
-            box(c.name, c.pos, vec3(0.5, 0.5, 0.5), "crate", true, true)
+            box(c.name, c.pos, vec3(0.5, 0.5, 0.5), "crate", true, true, "crate")
         end
     end
     -- week 8 looping rooms, then the end section moves past Door 10
@@ -293,8 +298,11 @@ local function buildRooms()
     box("End Wall W", vec3(-1.3, 1.6, -140.9), vec3(0.4, 3.6, 3.0), "concrete", true)
     box("End Wall E", vec3(1.3, 1.6, -140.9), vec3(0.4, 3.6, 3.0), "concrete", true)
     box("End Cap", vec3(0, 1.6, -142.5), vec3(3.0, 3.6, 0.4), "concrete", true)
-    -- the companion drone (visual entity; pure Lua steering)
-    box("Drone", vec3(1.0, 2.4, 3.0), vec3(0.4, 0.25, 0.4), "glass", false)
+    -- SPARK (week 11): a real body + eye rig instead of the glass box. Both
+    -- colliderless — pure Lua steering, and setRotation only moves visuals.
+    -- Blue eye by the colour law: blue = SPARK/drone.
+    box("Drone", vec3(1.0, 2.4, 3.0), vec3(1, 1, 1), "metal", false, false, "drone_body")
+    box("Drone Eye", vec3(1.0, 2.4, 2.78), vec3(1, 1, 1), "metal_blue", false, false, "drone_eye")
     forge.log("rooms 1-10 built (relay ring + atrium: the loop pass)")
 end
 
@@ -395,7 +403,19 @@ local function updatePlateVisuals(dt)
     forge.scene.setPosition("Plate T", moveTowards(tAt, vec3(tAt.x, tTy, tAt.z), step))
 end
 
+-- SPARK personality pass (week 11): the drone is a body + eye rig now. It
+-- flies nose-first, banks into turns, watches the player when settled, and
+-- ANSWERS commands with motion on top of the week-9 beeps — a decaying
+-- barrel-roll waggle for "yes", a firm head-shake with a pinched aperture
+-- for "no". All procedural Lua; setRotation (ADR-027) is the engine seam.
 local droneTime = 0
+local droneYaw = 0
+local droneMood, droneMoodT = nil, 0 -- "happy" | "no", seconds remaining
+local atan2 = math.atan2 or math.atan -- two-arg atan across Lua versions
+-- Yaw (deg) that points the model's -Z forward along (dx, dz).
+local function yawToward(dx, dz) return math.deg(atan2(-dx, -dz)) end
+local function shortArc(a) return (a + 180) % 360 - 180 end
+
 local function updateDrone(dt)
     droneTime = droneTime + dt
     local p = forge.player.position()
@@ -405,18 +425,21 @@ local function updateDrone(dt)
         if drone.parkedAt then
             drone.parkedAt = nil
             forge.audio.play("assets/sounds/beep_ok.wav")
+            droneMood, droneMoodT = "happy", 0.8
             forge.log("drone: recalled")
         else
             for id, park in pairs(drone.parks) do
                 if p.z > park.zMin and p.z < park.zMax then
                     drone.parkedAt = id
                     forge.audio.play("assets/sounds/beep_ok.wav")
+                    droneMood, droneMoodT = "happy", 0.8
                     forge.log("drone: parking at " .. id)
                     break
                 end
             end
             if not drone.parkedAt then
                 forge.audio.play("assets/sounds/beep_no.wav")
+                droneMood, droneMoodT = "no", 0.8
                 forge.log("drone: nothing to hold here")
             end
         end
@@ -432,6 +455,44 @@ local function updateDrone(dt)
     local nextPos = moveTowards(at, target, drone.speed * dt)
     nextPos.y = nextPos.y + math.sin(droneTime * 3.0) * 0.02 -- idle bob
     forge.scene.setPosition(drone.name, nextPos)
+
+    -- Facing: nose-first when going somewhere, watch the player when not.
+    local mx, mz = target.x - at.x, target.z - at.z
+    local moveDist = math.sqrt(mx * mx + mz * mz)
+    local wantYaw
+    if moveDist > 0.35 then
+        wantYaw = yawToward(mx, mz)
+    else
+        wantYaw = yawToward(p.x - at.x, p.z - at.z)
+    end
+    local turn = shortArc(wantYaw - droneYaw)
+    local maxTurn = 240 * dt
+    if turn > maxTurn then turn = maxTurn elseif turn < -maxTurn then turn = -maxTurn end
+    droneYaw = droneYaw + turn
+    -- Bank into the turn, tip into motion; a live mood says it louder.
+    local roll = -turn * 2.2
+    local pitch = -math.min(moveDist * 6.0, 14.0)
+    local eyeScale = 1.0
+    if droneMoodT > 0 then
+        droneMoodT = droneMoodT - dt
+        local k = math.max(droneMoodT, 0)
+        if droneMood == "happy" then
+            roll = roll + math.sin(k * 18.0) * 22.0 * k -- decaying waggle
+            eyeScale = 1.0 + 0.4 * k                    -- aperture pops wide
+        else
+            droneYaw = droneYaw + math.sin(k * 20.0) * 9.0 * k -- head-shake
+            eyeScale = 1.0 - 0.45 * k                          -- pinched
+        end
+    end
+    if roll > 25 then roll = 25 elseif roll < -25 then roll = -25 end
+    forge.scene.setRotation(drone.name, vec3(pitch, droneYaw, roll))
+    -- The eye rides the body's front, mirrors its pose, pulses with mood.
+    local yr = math.rad(droneYaw)
+    forge.scene.setPosition("Drone Eye",
+                            vec3(nextPos.x - math.sin(yr) * 0.22, nextPos.y + 0.01,
+                                 nextPos.z - math.cos(yr) * 0.22))
+    forge.scene.setRotation("Drone Eye", vec3(pitch, droneYaw, roll))
+    forge.scene.setScale("Drone Eye", vec3(eyeScale, eyeScale, eyeScale))
 end
 
 local function droneAt(parkId)

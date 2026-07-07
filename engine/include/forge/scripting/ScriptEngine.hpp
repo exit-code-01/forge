@@ -70,11 +70,18 @@ public:
     // named texture; the host owns what texture names mean. This is the
     // affordable stand-in until HDR + emissive materials land.
     std::function<void(const std::string& name, const std::string& texture)> onSetEntityTexture;
+    // Character/prop orientation (ADR-027): drone banking, eye tracking,
+    // machinery. Euler degrees; the host applies it to the VISUAL transform
+    // only — box colliders stay axis-aligned, so rotate colliderless parts.
+    std::function<void(const std::string& name, glm::vec3 eulerDeg)> onSetEntityRotation;
     std::function<void(const std::string& name)> onDestroyEntity; // glass shatters
     // Rooms are Lua data (week 3): scripts spawn NAMED, textured, collidable
     // entities; the host owns meshes/textures/ECS. halfExtents 0 = no body.
+    // mesh picks from the host's model registry (ADR-027); the empty string
+    // means the unit cube, and unknown names fall back to it host-side.
     std::function<void(const std::string& name, glm::vec3 position, glm::vec3 scale,
-                       glm::vec3 halfExtents, const std::string& texture, bool dynamic)>
+                       glm::vec3 halfExtents, const std::string& texture, bool dynamic,
+                       const std::string& mesh)>
         onSpawnEntity;
     std::function<glm::vec3()> onPlayerPosition;
     // Respawn/checkpoint (week 6): scripts warp the player; the host owns the

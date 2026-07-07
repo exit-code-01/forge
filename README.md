@@ -47,15 +47,18 @@ sudo apt install xorg-dev libwayland-dev libxkbcommon-dev wayland-protocols
 
 ## Status
 
-P8 complete (lean, by decision — ADR-020): `forge::Audio` (miniaudio, no
-device required to build or run), CPU burst particles (`fx::ParticleEmitter`)
-rendered through the ordinary draw path, and keyframe transform animation
-(`anim::Clip`) driving a moving platform whose collider rides along. Lua
-scripts own sound and sparks: the kick now flashes and thumps. Skinned-mesh
-animation is explicitly deferred until VAULT's art pass proves it needs an
-organic character. Zero validation complaints. Next: P9 (networking) is
-optional — the realistic path is straight to VAULT week 1: character
-controller, pickup/throw, the first grey-box room.
+VAULT (the sample game) is playable start to finish: tutorial + ten puzzle
+rooms of plates, lasers, glass, a parkable companion drone, checkpoints,
+menus, settings, and save/continue (ADR-026). The week-11 character pass
+(ADR-027) replaced the grey boxes that mattered: procedurally generated
+OBJ models (crates, plates, vault doors, laser rigs — `tools/gen_models.py`),
+SPARK as a body + eye rig that banks, watches you, and answers commands
+with motion, and UNIT-7's first-person gravity glove with throw/grab
+animation driven by `anim::Clip`'s new euler rotation curves. Character
+animation is rigid-rig by design — every VAULT character is a machine;
+skinning stays deferred until an organic character exists. Engine seams
+that landed on the way: a model registry (`forge.scene.spawn(..., mesh)`),
+`forge.scene.setRotation`, and `Audio::setMasterVolume`.
 
 ## Vulkan SDK
 

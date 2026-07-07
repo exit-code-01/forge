@@ -535,3 +535,37 @@ stores it. Resuming is safe-by-construction because every room is
 self-contained (its crates spawn in-room) — a fresh-state run that starts
 deep, no latch replay. Continue does not reset furthest; Restart does not
 erase it — "my best run" survives both.
+
+## ADR-027 — Week 11 character pass: real models + rigid-rig animation, no skinning
+
+The prompt's animation chapter asks for UNIT-7 arms, a SPARK rig, and
+skeletal blending. The art direction answers it cheaper: EVERY character
+in VAULT is a machine, and machines articulate at joints between RIGID
+parts — so the affordable rig is "several entities + orientation", not
+skinned meshes. The deferred skeletal gap stays deferred, now with
+evidence instead of a hunch. Three small engine seams landed:
+(1) MODEL REGISTRY — every OBJ in assets/models/ becomes spawnable under
+its filename stem; forge.scene.spawn grows an optional trailing mesh arg
+(nil = unit cube, unknown names fall back to it), so no existing call
+site changed shape. (2) forge.scene.setRotation(name, eulerDeg) — writes
+the VISUAL transform only; box colliders stay axis-aligned, so scripts
+rotate colliderless parts (SPARK, the glove, future machinery).
+(3) anim::Clip euler tracks (sampleEuler, degrees, linear, both tracks
+looping on the clip's shared duration) — rotation curves for rigid rigs;
+keep key steps under 180 degrees; quaternion slerp arrives with skinning
+if an organic character ever demands it. ASSETS: tools/gen_models.py
+composes eight OBJs from boxes and cylinders (hard normals / smooth
+sides, CCW-outward per ADR-012) — crate, plate, door, emitter, receiver
+in UNIT BOUNDS so spawn scale keeps meaning what it meant, and
+drone_body, drone_eye, glove REAL-SIZE because rotated proportions must
+survive. metal_blue.png (blue = SPARK, completing the colour law) is
+generated LAST so the shared rng stream keeps every earlier texture
+byte-identical. CHARACTERS: SPARK is now a body + eye rig — banks into
+turns, flies nose-first, watches the player when settled, answers Q with
+a decaying barrel-roll waggle ("yes") or a head-shake with a pinched
+aperture ("no"); all procedural Lua on the setRotation seam. UNIT-7's
+glove is a host-side viewmodel entity riding the camera in right/up/look
+space: walk sway, a carry reach, and throw/grab clips that are the first
+consumers of the euler curves — both clips end at zero, so finishing IS
+the idle pose. Verified live: grab ring -> carry pose -> throw punch with
+the crate mid-flight, plus title-scene renders of every new mesh.
