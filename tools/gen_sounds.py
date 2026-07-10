@@ -119,6 +119,64 @@ def main() -> None:
         return 0.20 * sq * math.exp(-t * 7.0)
     render("beep_no.wav", 0.25, beep_no)
 
+    # ---- week 12 (PITCH & CATCH) ----
+    # Charge whine: THREE seamless loops the script crossfades by charge01 —
+    # the pitch rises then audibly PLATEAUS (three pre-baked loops beat an
+    # audio.set_pitch engine seam, per the design cut list). Loopable = every
+    # partial completes integer cycles in 0.5 s (multiples of 2 Hz), constant
+    # amplitude, no envelope.
+    def whine(f1, f2, wob):
+        def fn(t):
+            am = 1.0 + 0.12 * math.sin(2.0 * math.pi * wob * t)  # wob: integer*2 Hz
+            return 0.16 * am * (math.sin(2.0 * math.pi * f1 * t)
+                                + 0.5 * math.sin(2.0 * math.pi * f2 * t))
+        return fn
+    render("whine_low.wav", 0.5, whine(160.0, 322.0, 6.0))
+    render("whine_mid.wav", 0.5, whine(280.0, 562.0, 8.0))
+    render("whine_high.wav", 0.5, whine(440.0, 884.0, 12.0))
+
+    # charge_click: the full-power tell - a short metallic latch.
+    def charge_click(t):
+        i = int(t * RATE)
+        tick = (noise[i % RATE] - noise[(i - 1) % RATE]) * math.exp(-t * 140.0)
+        ping = math.sin(2.0 * math.pi * 2400.0 * t) * math.exp(-t * 60.0)
+        return 0.5 * (0.6 * tick + 0.5 * ping)
+    render("charge_click.wav", 0.09, charge_click)
+
+    # gong: the resonance bell RINGS - big, warm, long; unmistakably a reward
+    # (the chime's larger sibling; inharmonic partials read as struck metal).
+    def gong(t):
+        env = min(t / 0.004, 1.0)
+        s = (math.sin(2.0 * math.pi * 220.0 * t) * math.exp(-t * 2.2)
+             + 0.65 * math.sin(2.0 * math.pi * 331.0 * t) * math.exp(-t * 3.0)
+             + 0.4 * math.sin(2.0 * math.pi * 524.0 * t) * math.exp(-t * 4.5)
+             + 0.25 * math.sin(2.0 * math.pi * 742.0 * t) * math.exp(-t * 7.0))
+        return 0.5 * env * s
+    render("gong.wav", 1.2, gong)
+
+    # thunk: the under-speed bell answer - dull, muted, "harder".
+    def thunk(t):
+        f = 130.0 * math.exp(-t * 10.0) + 60.0
+        return 0.42 * math.exp(-t * 30.0) * math.sin(2.0 * math.pi * f * t)
+    render("thunk.wav", 0.16, thunk)
+
+    # clunk: a crate seating into a snap-socket - thud + latch tick.
+    def clunk(t):
+        thud = math.sin(2.0 * math.pi * 95.0 * t) * math.exp(-t * 35.0)
+        t2 = max(0.0, t - 0.06)
+        tick = math.sin(2.0 * math.pi * 1500.0 * t2) * math.exp(-t2 * 70.0) if t > 0.06 else 0.0
+        return 0.45 * thud + 0.2 * tick
+    render("clunk.wav", 0.18, clunk)
+
+    # snap: SPARK's magnet catch - descending zip into a soft grip thump.
+    def snap(t):
+        f = 1900.0 * math.exp(-t * 26.0) + 220.0
+        zip_ = math.sin(2.0 * math.pi * f * t) * math.exp(-t * 22.0)
+        t2 = max(0.0, t - 0.05)
+        thump = math.sin(2.0 * math.pi * 130.0 * t2) * math.exp(-t2 * 40.0) if t > 0.05 else 0.0
+        return 0.34 * zip_ + 0.3 * thump
+    render("snap.wav", 0.2, snap)
+
 
 if __name__ == "__main__":
     main()

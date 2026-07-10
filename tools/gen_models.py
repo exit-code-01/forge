@@ -227,6 +227,30 @@ def receiver():
     return m
 
 
+def bell():
+    # Resonance bell (week 12): a gong dish facing +Z (toward the player's
+    # firing lane) on a mount block. An instrument, not an enemy — stepped
+    # concentric rings read as "strike me" at range.
+    m = Mesh("bell")
+    m.box((0, 0, -0.32), (0.26, 0.26, 0.36))                            # mount
+    m.cylinder((0, 0, -0.06), 0.48, 0.12, segments=14, axis="z")        # outer ring
+    m.cylinder((0, 0, 0.05), 0.32, 0.12, segments=14, axis="z", r_top=0.24)  # cone step
+    m.cylinder((0, 0, 0.15), 0.12, 0.1, segments=10, axis="z")          # boss
+    return m
+
+
+def socket():
+    # Snap-socket (week 12): a shallow landing basin — base pad, flared
+    # funnel ring, four guide nubs. Forgiveness geometry: the script eases
+    # anything that lands close into the seat.
+    m = Mesh("socket")
+    m.cylinder((0, -0.42, 0), 0.5, 0.16, segments=14)                   # base pad
+    m.cylinder((0, -0.28, 0), 0.34, 0.14, segments=14, r_top=0.48)      # flare ring
+    for a, b in ((0.4, 0), (-0.4, 0), (0, 0.4), (0, -0.4)):             # guide nubs
+        m.box((a, -0.22, b), (0.12, 0.26, 0.12))
+    return m
+
+
 # ---- REAL-SIZE characters (spawned at scale 1; forward = -Z) ---------------
 
 def drone_body():
@@ -267,7 +291,8 @@ def glove():
 def main() -> None:
     out_dir = os.path.join(os.path.dirname(__file__), "..", "assets", "models")
     os.makedirs(out_dir, exist_ok=True)
-    for build in (crate, plate, door, emitter, receiver, drone_body, drone_eye, glove):
+    for build in (crate, plate, door, emitter, receiver, bell, socket, drone_body, drone_eye,
+                  glove):
         build().write(out_dir)
 
 

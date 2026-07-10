@@ -569,3 +569,61 @@ space: walk sway, a carry reach, and throw/grab clips that are the first
 consumers of the euler curves — both clips end at zero, so finishing IS
 the idle pose. Verified live: grab ring -> carry pose -> throw punch with
 the crate mid-flight, plus title-scene renders of every new mesh.
+
+## ADR-028 — Week 12 (PITCH & CATCH): the launch pass — charged glove, bells, and a drone that catches
+
+The owner asked for character, animation, more intuitive levels, and "more
+interesting mechanics like shooting maybe". A four-designer/three-judge
+panel converged (102 vs 87/88/86) on delivering the shooting FANTASY inside
+the non-violent language instead of guns: PITCH & CATCH. Positioning thesis:
+VAULT is the only first-person puzzler where the shooting loop ends in a
+game of catch with your companion — aim, charge, fire, and SPARK catches
+the shot, so pulling the trigger builds trust instead of dealing damage.
+Rule 5's no-combat line held; the refusal is logged in the plan's cut list.
+FIVE ENGINE SEAMS (~1 day, ENGINE_GAPS.md): input.down (lmb/rmb),
+player.look, player.charge + set_throw_speed with the throw moved to
+RELEASE-edge (the host owns press-edge disambiguation — a grab-press must
+never throw on its release; the script owns the charge CURVE, so feel
+tuning stays hot-reloadable), physics.set_velocity, hud.set_reticle.
+CHARGED LAUNCH: tap = bit-legacy 11 m/s (0.15 s dead zone), hold = ramp to
+25 over 0.9 s; three crossfaded whine loops PLATEAU audibly and click at
+full (sound teaches first; R11's one text nudge fires only after three
+too-soft hits). Viewmodel: wrist coils 8 cm, full-charge tremble, recoil
+clip amplitude scales with charge01, sprint lean. Mass is read back in via
+size (throws are velocity assignments): the 1.2-scale heavy cube launches
+at ~0.55x — a full charge barely crosses R13's pit, a tap flops.
+RESONANCE BELLS: pure Lua impact targets — swept-segment vs expanded AABB
+(a 25 m/s crate never tunnels a dish), ring >= per-bell speed latches green
++ gong + wobble clip; softer answers a thunk + "harder". relatch bells
+re-arm (R14's timed gate). Instruments, not enemies.
+SPARK F COMMAND: point + press — aim ray (which passes LISTED see-through
+panes: R14's divider glass is the room key), 0.5 m grid snap, no-fly AABBs
++ straight-line flight validity; refusals reuse the shipped head-shake.
+Stationed SPARK is plate weight (parkId path untouched, Q unchanged) and
+CATCHES light crates (>6 m/s, approaching, >2.6 m from player): velocity
+snap + underside carry + sag-and-recovery, deposit into the nearest
+socket/plate within 2.8 m. Heavy crates get the sink-drop-headshake — the
+mass rule taught as comedy. Trust arc: first catch flips flinches into
+brace lean-ins. Catcher stance and bell-curiosity idles are ROOM-FLAGGED so
+the game's most trusted signal never fires where it would mislead.
+ROOMS R11-R14 (checkpoints 12-15, win moved to -210.6): R11 The Range
+(bells taught tap -> charged -> through-glass), R12 Errand (F taught in
+total isolation over a chasm; pad + bridge LATCH so recalling SPARK never
+strands), R13 Alley-Oop (catch + heavy rule; snap-socket + heavy plate gate
+the door), R14 Duet (parallel lanes: firing aperture, through-glass F
+errand, over-the-wall catch; Door 14 opening triggers the reunion orbit).
+TWO REAL BUGS the verification rig caught: (1) forge.scene.getPosition
+returned the SPAWN TransformC for dynamic bodies — every script read of a
+moving crate was frozen (also silently broke week-6's crate-void respawn);
+now returns the live physics transform. (2) impact speeds must be read as
+max(current, previous frame) — by the frame a segment test sees the crate
+inside a target's AABB, Jolt has already REFLECTED the velocity (20 m/s in
+read as 8 out); wall-clock position deltas also under-read whenever a slow
+frame simulates less time than it took, so speeds come from
+physics.velocity via a cached body id, not position deltas.
+Verified live (log-confirmed): bell bB RUNG at 20.0 / bA too-soft at 6.9,
+full charge white-ring click, F go-there acceptance + grid snap, catch ->
+delivered -> socket filled in one flow, TOO HEAVY refusal, trust unlock,
+continue-into-R11 from the extended checkpoint ladder. Known minor: socket
+occupancy can flicker once as a crate settles (hysteresis added); a glove
+grab can pin-fight a crate SPARK is carrying (rare, logged as charm debt).

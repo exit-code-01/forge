@@ -83,6 +83,12 @@ void ScriptEngine::bindPhysics(PhysicsWorld& physics) {
     phys.set_function("kick", [&physics](uint32_t body, const glm::vec3& velocity) {
         physics.addLinearVelocity(BodyId{body}, velocity);
     });
+    // set_velocity is ASSIGNMENT where kick is additive — kick can never zero
+    // a body. Powers SPARK's catch snap (week 12): zero on contact, zero per
+    // frame while carried, gentle release into a socket.
+    phys.set_function("set_velocity", [&physics](uint32_t body, const glm::vec3& velocity) {
+        physics.setLinearVelocity(BodyId{body}, velocity);
+    });
     phys.set_function("position", [&physics](uint32_t body) {
         const glm::mat4 transform = physics.bodyTransform(BodyId{body});
         return glm::vec3(transform[3]);
@@ -113,13 +119,36 @@ void ScriptEngine::bindInput(const Input& input) {
     sol::table in = forge.create_named("input");
     // Edge-triggered by design: scripts poll once per frame in onUpdate,
     // which is exactly the latched-press contract Input already keeps.
+    // "lmb"/"rmb" join the key names in week 12 (the charge verb).
     in.set_function("pressed", [&input](const std::string& name) {
+        if (name == "lmb") {
+            return input.wasMousePressed(MouseButton::Left);
+        }
+        if (name == "rmb") {
+            return input.wasMousePressed(MouseButton::Right);
+        }
         const auto key = nameToKey(name);
         if (!key) {
             FORGE_WARN("[lua] unknown key name '{}'", name);
             return false;
         }
         return input.wasKeyPressed(*key);
+    });
+    // Held-state polling (week 12): charge timers want "is it STILL down",
+    // which the edge latch deliberately doesn't answer.
+    in.set_function("down", [&input](const std::string& name) {
+        if (name == "lmb") {
+            return input.isMouseDown(MouseButton::Left);
+        }
+        if (name == "rmb") {
+            return input.isMouseDown(MouseButton::Right);
+        }
+        const auto key = nameToKey(name);
+        if (!key) {
+            FORGE_WARN("[lua] unknown key name '{}'", name);
+            return false;
+        }
+        return input.isKeyDown(*key);
     });
 }
 
@@ -180,6 +209,26 @@ void ScriptEngine::bindScene() {
             onSetPlayerPosition(position);
         }
     });
+    // forge.player.look() -> eye, dir (week 12): the glove's own ray, now
+    // script-visible. Two return values, Lua-style.
+    playerTable.set_function("look", [this]() -> std::tuple<glm::vec3, glm::vec3> {
+        if (onPlayerLook) {
+            const auto [eye, dir] = onPlayerLook();
+            return {eye, dir};
+        }
+        return {glm::vec3(0.0f), glm::vec3(0.0f, 0.0f, -1.0f)};
+    });
+    // forge.player.charge() -> seconds a charge-press has been held (0 =
+    // idle); forge.player.set_throw_speed(v) -> the speed the NEXT release
+    // throws at (host clamps, resets after the throw). Split per the seam
+    // comment in ScriptEngine.hpp: host owns the edges, script owns the curve.
+    playerTable.set_function("charge",
+                             [this]() { return onPlayerCharge ? onPlayerCharge() : 0.0f; });
+    playerTable.set_function("set_throw_speed", [this](float speed) {
+        if (onSetThrowSpeed) {
+            onSetThrowSpeed(speed);
+        }
+    });
 
     // forge.game.win(): the script signals the run is complete; the host
     // raises the win screen (week 6). Game/menu state is the HOST's business.
@@ -213,6 +262,14 @@ void ScriptEngine::bindScene() {
     hudTable.set_function("set_hint", [this](const std::string& text) {
         if (onSetHint) {
             onSetHint(text);
+        }
+    });
+    // forge.hud.set_reticle(mode, value): crosshair answer-back (week 12).
+    // "default" + charge01 blooms the ring; "command" + intensity flashes it
+    // SPARK-blue while an F command is acknowledged.
+    hudTable.set_function("set_reticle", [this](const std::string& mode, float value) {
+        if (onSetReticle) {
+            onSetReticle(mode, value);
         }
     });
 }

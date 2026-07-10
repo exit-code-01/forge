@@ -344,9 +344,10 @@ int main() {
                              {"glass", glassTexture}, {"concrete", concreteTexture},
                              {"floor", floorTexture}, {"metal", metalTexture}};
             // Colour-language tints (week 9): red = locked, green = solved,
-            // orange = interactable, blue = SPARK/drone (week 11).
-            // Script-only names, no dedicated handles.
-            for (const char* name : {"metal_red", "metal_green", "metal_orange", "metal_blue"}) {
+            // orange = interactable, blue = SPARK/drone (week 11),
+            // dark = heavy (week 12). Script-only names, no dedicated handles.
+            for (const char* name :
+                 {"metal_red", "metal_green", "metal_orange", "metal_blue", "metal_dark"}) {
                 const auto img =
                     forge::assets::loadImage(std::string("assets/textures/") + name + ".png");
                 textureByName[name] = renderer->addTexture(img.width, img.height, img.rgba);
@@ -495,7 +496,9 @@ int main() {
         };
         const forge::anim::Clip* gloveClip = nullptr;
         float gloveClipTime = 0.0f;
+        float gloveClipAmp = 1.0f; // week 12: recoil scales with charge
         float gloveSwayTime = 0.0f;
+        float sprintLean = 0.0f; // week 12 juice: the glove leans into a sprint
 
         // ---- The player: capsule controller + first-person camera.
         physics.createCharacter({0.0f, 1.0f, 5.0f}, 0.35f, 0.55f);
@@ -506,7 +509,21 @@ int main() {
             bool holding = false;
             bool wasGrounded = true;
             float stepTimer = 0.0f;
+            // Charged launch (week 12). The press-edge disambiguation lives
+            // here: a press that GRABS must never throw on its release; a
+            // press that starts while already holding is a CHARGE-press and
+            // throws on release. Lua reads chargeTime and maps it to
+            // throwSpeed (clamped below); tap-throws stay legacy 11 m/s.
+            bool chargePress = false;
+            float chargeTime = 0.0f;
+            float throwSpeed = 11.0f;
         } player;
+        // The player's aim ray, script-visible via forge.player.look().
+        glm::vec3 camEye{0.0f, 1.65f, 5.0f};
+        glm::vec3 camLook{0.0f, 0.0f, -1.0f};
+        // Reticle answer-back (week 12): Lua sets mode+value, we draw.
+        std::string reticleMode = "default";
+        float reticleValue = 0.0f;
         bool playMode = true; // TAB toggles into the editor
 
         // ---- Game state (week 6): a tiny menu FSM layered over play mode.
@@ -587,9 +604,19 @@ int main() {
                 physics.teleport(b->id, p);
             }
         };
+        // Week 12 fix: dynamic bodies live in PHYSICS — TransformC only holds
+        // their spawn pose. getPosition must return the live body transform,
+        // or every script read of a moving crate is frozen at its spawn point
+        // (this also silently broke the week-6 crate-void respawn check).
         script.onGetEntityPosition = [&](const std::string& name) {
             const auto e = findByName(name);
-            return scene.alive(e) ? scene.get<TransformC>(e).position : glm::vec3(0.0f);
+            if (!scene.alive(e)) {
+                return glm::vec3(0.0f);
+            }
+            if (auto* b = scene.tryGet<BodyC>(e); b != nullptr && b->dynamic) {
+                return glm::vec3(physics.bodyTransform(b->id)[3]);
+            }
+            return scene.get<TransformC>(e).position;
         };
         script.onSetEntityScale = [&](const std::string& name, glm::vec3 sc) {
             const auto e = findByName(name);
@@ -636,6 +663,19 @@ int main() {
             }
         };
         script.onPlayerPosition = [&]() { return physics.characterPosition(); };
+        // Aim + charge seams (week 12): the same eye/look the glove uses, the
+        // charge-press timer, and the script-tuned launch speed (clamped to
+        // the 11..25 design range; reset to legacy after every throw).
+        script.onPlayerLook = [&]() { return std::make_pair(camEye, camLook); };
+        script.onPlayerCharge = [&]() { return player.chargePress ? player.chargeTime : 0.0f; };
+        script.onSetThrowSpeed = [&](float speed) {
+            player.throwSpeed = std::clamp(speed, 11.0f, 25.0f);
+        };
+        // Reticle answer-back (week 12): Lua owns when, we own the pixels.
+        script.onSetReticle = [&](const std::string& mode, float value) {
+            reticleMode = mode;
+            reticleValue = std::clamp(value, 0.0f, 1.0f);
+        };
         // Per-room lighting pass (week 5): scene.lua tints the key light by
         // player z. Renderer holds it across frames; zero dir = keep the angle.
         script.onSetLighting = [&](glm::vec3 color, glm::vec3 dir) {
@@ -646,6 +686,8 @@ int main() {
         script.onSetPlayerPosition = [&](glm::vec3 p) {
             physics.setCharacterPosition(p);
             player.holding = false; // a warp drops whatever you were carrying
+            player.chargePress = false;
+            player.chargeTime = 0.0f;
         };
         // Run complete (week 6): the script fires this once the finale clears.
         // The host raises the win screen and frees the cursor for the menu.
@@ -720,6 +762,8 @@ int main() {
             if (input.wasKeyPressed(forge::Key::Tab)) {
                 playMode = !playMode;
                 player.holding = false; // no stale grabs across mode switches
+                player.chargePress = false;
+                player.chargeTime = 0.0f;
                 cursorForState();       // editor frees the cursor; play recaptures
             }
 
@@ -800,6 +844,8 @@ int main() {
                 const glm::vec3 eye = physics.characterPosition() + glm::vec3(0.0f, 0.65f, 0.0f);
                 camera.position = eye;
                 camera.target = eye + look;
+                camEye = eye; // script-visible aim ray (forge.player.look)
+                camLook = look;
 
                 // QoL (week 7): light up the crosshair when the glove WOULD
                 // grab — same raycast + dynamic-body test the click uses.
@@ -812,15 +858,14 @@ int main() {
                     }
                 }
 
-                // ---- Gravity glove: grab / carry / throw / drop.
+                // ---- Gravity glove: grab / carry / charge / launch / drop.
+                // Week 12: the throw moved from press-edge to RELEASE-edge so
+                // a held LMB charges. A press while holding arms the charge;
+                // the release that ends the GRAB press must never throw.
                 if (simRun && input.wasMousePressed(forge::MouseButton::Left)) {
-                    if (player.holding) { // throw
-                        physics.setLinearVelocity(player.held, look * 11.0f);
-                        player.holding = false;
-                        audio.play("assets/sounds/throw.wav");
-                        sparks.burst(eye + look * 1.2f, 12);
-                        gloveClip = &gloveThrowClip; // viewmodel punches with it
-                        gloveClipTime = 0.0f;
+                    if (player.holding) { // charge-press: throw arms on release
+                        player.chargePress = true;
+                        player.chargeTime = 0.0f;
                     } else if (const auto hit = physics.raycast(eye, look, 3.5f)) {
                         const auto it = bodyToEntity.find(hit->body.value);
                         auto* bc =
@@ -841,9 +886,43 @@ int main() {
                             eye.x, eye.y, eye.z, look.x, look.y, look.z);
                     }
                 }
+                if (simRun && player.holding && player.chargePress) {
+                    player.chargeTime += dt; // Lua maps this to throwSpeed
+                }
+                if (simRun && player.holding && player.chargePress &&
+                    input.wasMouseReleased(forge::MouseButton::Left)) {
+                    // Launch at the script-tuned speed. Recoil, sound and the
+                    // clip amplitude all scale with how hard the shot was.
+                    // The throw is a velocity ASSIGNMENT (mass-independent by
+                    // construction), so mass is read back in via size: bigger
+                    // held things leave the glove slower. The heavy cube
+                    // (scale 1.2) launches at ~0.55x — a full charge barely
+                    // clears R13's pit; a tap flops at its feet.
+                    const float charge01 = (player.throwSpeed - 11.0f) / 14.0f;
+                    float massFactor = 1.0f;
+                    if (const auto itH = bodyToEntity.find(player.held.value);
+                        itH != bodyToEntity.end()) {
+                        const float sx = scene.get<TransformC>(itH->second).scale.x;
+                        massFactor = std::clamp(0.5f / std::max(sx, 0.01f), 0.55f, 1.0f);
+                    }
+                    physics.setLinearVelocity(player.held,
+                                              look * (player.throwSpeed * massFactor));
+                    player.holding = false;
+                    player.chargePress = false;
+                    player.chargeTime = 0.0f;
+                    player.throwSpeed = 11.0f; // failsafe: next tap is legacy
+                    audio.play("assets/sounds/throw.wav", 0.7f + 0.5f * charge01);
+                    sparks.burst(eye + look * 1.2f, 12 + static_cast<int>(20.0f * charge01));
+                    gloveClip = &gloveThrowClip; // viewmodel punches with it
+                    gloveClipTime = 0.0f;
+                    gloveClipAmp = 0.5f + 1.1f * charge01; // tap nudges, full charge kicks
+                }
                 if (simRun && player.holding && input.wasMousePressed(forge::MouseButton::Right)) {
                     physics.setLinearVelocity(player.held, {0.0f, 0.0f, 0.0f}); // gentle drop
                     player.holding = false;
+                    player.chargePress = false; // an armed charge dies with the drop
+                    player.chargeTime = 0.0f;
+                    player.throwSpeed = 11.0f;
                     audio.play("assets/sounds/grab.wav"); // same blip, release direction
                 }
                 if (simRun && player.holding) {
@@ -880,20 +959,39 @@ int main() {
                                         : glm::vec3(0.28f, -0.26f, 0.62f);
                     off.x += std::cos(gloveSwayTime * 3.6f) * 0.008f * swayAmp;
                     off.y += std::sin(gloveSwayTime * 7.2f) * 0.010f * swayAmp;
+                    // Sprint lean (week 12 juice): the glove drops and rolls
+                    // while sprinting — the whole launch pass reads heavier.
+                    const bool sprinting = walking && input.isKeyDown(forge::Key::LeftShift);
+                    sprintLean += ((sprinting ? 1.0f : 0.0f) - sprintLean) *
+                                  std::min(dt * 8.0f, 1.0f);
+                    off.y -= 0.05f * sprintLean;
+                    // Charge pose (week 12): wrist coils back with the charge;
+                    // at full power the glove trembles — the kinesthetic tell
+                    // that pairs with the audio plateau + click.
+                    const float charge01 = (player.throwSpeed - 11.0f) / 14.0f;
+                    off.z -= 0.08f * charge01;
+                    off.y += 0.02f * charge01;
+                    if (charge01 > 0.99f) {
+                        off.x += std::sin(gloveSwayTime * 90.0f) * 0.002f;
+                        off.y += std::cos(gloveSwayTime * 73.0f) * 0.002f;
+                    }
                     glm::vec3 clipEuler{0.0f};
                     if (gloveClip != nullptr) {
-                        off += gloveClip->samplePosition(gloveClipTime, false);
-                        clipEuler = gloveClip->sampleEuler(gloveClipTime, false);
+                        off += gloveClip->samplePosition(gloveClipTime, false) * gloveClipAmp;
+                        clipEuler = gloveClip->sampleEuler(gloveClipTime, false) * gloveClipAmp;
                         if (gloveClipTime >= gloveClip->duration()) {
                             gloveClip = nullptr; // clips end at zero == idle pose
+                            gloveClipAmp = 1.0f;
                         }
                     }
                     auto& gt = scene.get<TransformC>(gloveEntity);
                     gt.position = eye + right * off.x + upv * off.y + look * off.z;
                     // Resting pose leans a few degrees in and down — a hand at
-                    // ease, not a rifle sight. Clip curves add on top.
-                    gt.eulerDeg =
-                        glm::vec3(player.pitch - 4.0f, -player.yaw - 10.0f, 0.0f) + clipEuler;
+                    // ease, not a rifle sight. Clip curves add on top; charge
+                    // cocks the wrist up, sprint rolls the forearm in.
+                    gt.eulerDeg = glm::vec3(player.pitch - 4.0f + 9.0f * charge01,
+                                            -player.yaw - 10.0f, 8.0f * sprintLean) +
+                                  clipEuler;
                 }
             } else {
                 // ---- Editor orbit camera (unchanged from P7).
@@ -927,8 +1025,22 @@ int main() {
                     const ImGuiIO& io = ImGui::GetIO();
                     ImDrawList* draw = ImGui::GetForegroundDrawList();
                     const ImVec2 center{io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f};
+                    if (reticleMode == "command" && reticleValue > 0.01f) {
+                        // SPARK-blue flash: an F command was acknowledged.
+                        const auto a = static_cast<int>(230.0f * reticleValue);
+                        draw->AddCircle(center, 8.0f, IM_COL32(90, 170, 255, a), 0, 3.0f);
+                    }
                     if (player.holding) {
                         draw->AddCircleFilled(center, 5.0f, IM_COL32(255, 220, 120, 230));
+                        if (reticleMode == "default" && reticleValue > 0.01f) {
+                            // Charge bloom: the ring grows with the charge and
+                            // flares white at full power (the visual click).
+                            const bool full = reticleValue >= 0.999f;
+                            draw->AddCircle(center, 7.0f + 9.0f * reticleValue,
+                                            full ? IM_COL32(255, 255, 255, 255)
+                                                 : IM_COL32(255, 200, 90, 220),
+                                            0, full ? 3.0f : 2.0f);
+                        }
                     } else if (aimGrabbable) { // amber ring: the glove will grab
                         draw->AddCircle(center, 6.0f, IM_COL32(255, 220, 120, 240), 0, 2.5f);
                     } else {
@@ -944,8 +1056,8 @@ int main() {
                         draw->AddText(at, IM_COL32(255, 255, 255, 205), hudHint.c_str());
                     }
                     draw->AddText({12.0f, io.DisplaySize.y - 26.0f}, IM_COL32(255, 255, 255, 160),
-                                  "WASD move  SPACE jump  LMB grab/throw  RMB drop  "
-                                  "Q drone  R respawn  E crates  ESC pause  TAB editor");
+                                  "WASD move  SPACE jump  LMB grab / hold-CHARGE / release-throw  "
+                                  "RMB drop  Q park drone  F send drone  R respawn  ESC pause");
                 }
 
                 // ---- Menu overlays (week 6). A centred window per non-playing
@@ -969,8 +1081,9 @@ int main() {
                     if (gameState == GameState::Title) {
                         ImGui::TextUnformatted("VAULT");
                         ImGui::Separator();
-                        ImGui::TextWrapped("A physics puzzle in ten rooms. Carry crates, "
-                                           "weigh down plates, break the glass, reach the exit.");
+                        ImGui::TextWrapped("A physics puzzle in fourteen rooms. Carry crates, "
+                                           "charge the glove, ring the bells - and trust your "
+                                           "drone to catch what you throw.");
                         ImGui::Spacing();
                         if (ImGui::Button("Play", {-1.0f, 0.0f})) {
                             startRun(false);

@@ -85,6 +85,9 @@ def main() -> None:
     # blue = SPARK/drone (week 11 character pass). Appended LAST so the rng
     # stream keeps every earlier texture byte-identical.
     metal("metal_blue.png", (-26, 6, 66))
+    # dark = HEAVY (week 12 mass language: the launch-it-yourself cube).
+    # Same append-last rule: everything above stays byte-identical.
+    metal("metal_dark.png", (-38, -36, -30))
 
 
 if __name__ == "__main__":

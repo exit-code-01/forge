@@ -18,6 +18,24 @@ filled from the ADR log so the ledger is complete.
 | 11   | Real prop/character meshes from Lua | model registry (every `assets/models/*.obj` by stem) + optional `mesh` arg on `forge.scene.spawn` | 0.5 d |
 | 11   | Character orientation (SPARK banking, viewmodel) | `forge.scene.setRotation(name, eulerDeg)` — visual-only, colliders stay axis-aligned | 0.25 d |
 | 11   | Rotation curves for rigid-rig animation | `anim::Clip::eulerKeys` + `sampleEuler` (glove throw/grab clips consume them) | 0.25 d |
+| 12   | Held-state input polling (charge timers) | `forge.input.down(name)`; `pressed`/`down` accept `lmb`/`rmb` | 0.1 d |
+| 12   | Aim ray for scripted verbs (SPARK's F) | `forge.player.look() -> eye, dir` — the glove's own ray | 0.1 d |
+| 12   | Charged launch | throw moved to RELEASE-edge; `forge.player.charge()` (host owns the grab-press/charge-press disambiguation) + `forge.player.set_throw_speed(v)` (script owns the curve; host clamps 11–25, resets after every throw) | 0.25 d |
+| 12   | Velocity assignment (SPARK's catch snap) | `forge.physics.set_velocity(body, vel)` — `kick` is additive and can never zero a body | 0.1 d |
+| 12   | Reticle answer-back (charge bloom, F acknowledgment) | `forge.hud.set_reticle(mode, value)` — "default" blooms with charge01, "command" flashes SPARK-blue | 0.25 d |
+| 12   | Live positions for dynamic bodies | `forge.scene.getPosition` now returns the PHYSICS transform for dynamic bodies (TransformC only holds their spawn pose) — found by the bell tests; also fixes the silently-dead week-6 crate-void respawn check | 0.1 d |
+
+## Considered and cut (week 12 — cheaper answers existed)
+
+- **`forge.physics.impacts()` (Jolt contact listener)** — the resonance
+  bells use a Lua swept-segment test over per-crate physics velocities
+  instead: zero engine days, no tunneling at 25 m/s.
+- **`forge.audio.set_pitch`** — the charge whine is three pre-baked loops
+  crossfaded with the existing per-voice `set_volume`; the pitch plateau is
+  baked into the samples.
+- **`spawnBox` density param** — the heavy cube's mass READ comes from a
+  size-scaled throw speed host-side (throws are velocity assignments, so
+  Jolt mass never enters); real density waits for a mechanic that needs it.
 
 ## Closed in Lua (no engine change needed)
 

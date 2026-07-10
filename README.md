@@ -47,18 +47,24 @@ sudo apt install xorg-dev libwayland-dev libxkbcommon-dev wayland-protocols
 
 ## Status
 
-VAULT (the sample game) is playable start to finish: tutorial + ten puzzle
-rooms of plates, lasers, glass, a parkable companion drone, checkpoints,
-menus, settings, and save/continue (ADR-026). The week-11 character pass
-(ADR-027) replaced the grey boxes that mattered: procedurally generated
-OBJ models (crates, plates, vault doors, laser rigs — `tools/gen_models.py`),
-SPARK as a body + eye rig that banks, watches you, and answers commands
-with motion, and UNIT-7's first-person gravity glove with throw/grab
-animation driven by `anim::Clip`'s new euler rotation curves. Character
-animation is rigid-rig by design — every VAULT character is a machine;
-skinning stays deferred until an organic character exists. Engine seams
-that landed on the way: a model registry (`forge.scene.spawn(..., mesh)`),
-`forge.scene.setRotation`, and `Audio::setMasterVolume`.
+VAULT (the sample game) is playable start to finish: tutorial + **fourteen**
+puzzle rooms, menus, settings, and save/continue. Weeks 1–11 built the
+plates/lasers/glass vocabulary, the parkable companion drone, the art and
+character pass (rigid-rig SPARK + first-person glove, ADR-027). Week 12
+(ADR-028) is the **launch pass — PITCH & CATCH**: hold LMB to CHARGE a held
+crate (whine rises, plateaus, clicks) and release to launch at up to
+25 m/s; resonance bells that RING green when struck hard enough; and SPARK's
+new F command — point anywhere and the drone goes there, presses plates,
+and CATCHES your launches out of the air, sagging under the momentum before
+depositing into snap-sockets. Heavy cubes are too much for SPARK (taught as
+comedy, enforced as constraint). Four new rooms teach it: the Range, the
+Errand, the Alley-Oop, and the two-lane Duet finale. The niche this stakes
+out: the only first-person puzzler where the shooting loop ends in a game
+of catch with your companion — the trigger builds trust, not damage.
+Engine seams that landed on the way: `forge.input.down`,
+`forge.player.look/charge/set_throw_speed` (release-edge throws),
+`forge.physics.set_velocity`, `forge.hud.set_reticle`, and live physics
+positions from `forge.scene.getPosition` for dynamic bodies.
 
 ## Vulkan SDK
 

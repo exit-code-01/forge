@@ -22,6 +22,7 @@
 #include <functional>
 #include <memory>
 #include <string>
+#include <utility>
 
 namespace forge {
 
@@ -87,6 +88,17 @@ public:
     // Respawn/checkpoint (week 6): scripts warp the player; the host owns the
     // character controller. Pairs with onPlayerPosition.
     std::function<void(glm::vec3 position)> onSetPlayerPosition;
+    // Aim seam (week 12): eye position + look direction — the same ray the
+    // glove uses. Powers SPARK's Go-There command and any aimed verb.
+    std::function<std::pair<glm::vec3, glm::vec3>()> onPlayerLook;
+    // Charged launch (week 12). The HOST owns the press-edge disambiguation
+    // (a grab-press must never throw on release; a charge-press throws on
+    // release): charge() reports seconds since a charge-press began, 0 when
+    // idle. The SCRIPT owns the charge CURVE — it maps that time to a speed
+    // via set_throw_speed (host clamps, and resets to the 11 m/s legacy tap
+    // speed after every throw), keeping feel tuning hot-reloadable.
+    std::function<float()> onPlayerCharge;
+    std::function<void(float speed)> onSetThrowSpeed;
     // Run complete (week 6): the script fires this once the finale is cleared
     // so the host can raise the win screen. Host owns the menu/game state.
     std::function<void()> onWin;
@@ -101,6 +113,10 @@ public:
     // Objective hint line (week 7): the script owns WHAT the hint says (level
     // knowledge); the host owns drawing it on the HUD. Empty string clears.
     std::function<void(const std::string& text)> onSetHint;
+    // Reticle seam (week 12): the crosshair answers back. mode "default"
+    // blooms with value = charge01; mode "command" is the blue F-command
+    // acknowledgment with value = intensity. The host owns the pixels.
+    std::function<void(const std::string& mode, float value)> onSetReticle;
     // forge.scene.setPosition/getPosition(name), forge.player.position(),
     // forge.render.set_light(color, dir), forge.hud.set_hint(text).
     void bindScene();
