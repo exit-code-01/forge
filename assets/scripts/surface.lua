@@ -127,14 +127,24 @@ K.crates[#K.crates + 1] = CRATE_S2
 K.plates[#K.plates + 1] = { id = "ps_pad", center = vec3(359.8, 4.85, -30.2),
     half = vec3(0.8, 0.3, 0.8), latch = true, offTex = "metal_blue", noPlayer = true,
     visY = 4.55, visScale = vec3(1.6, 0.1, 1.6) } -- thin, set 2.5 m back from every edge
+-- F aim assist: the pad is 0.1 m thick and ~26 m away (a 0.3 degree aim
+-- otherwise); the drop mark is hidden behind the terrace lip from the run
+-- plate, so aiming at the lip / the yard's near half also sends SPARK there.
+K.fSnaps[#K.fSnaps + 1] = { at = vec3(359.8, 4.85, -30.2), r = 4.5,
+    station = vec3(359.8, 5.6, -30.2) }
+K.fSnaps[#K.fSnaps + 1] = { at = vec3(426.0, 0.0, 16.0), r = 7.0, station = vec3(426.0, 3.4, 16.5),
+    when = function(p) return p.x > 405 and p.x < 424.5 and p.z > 8 and p.z < 30 and p.y > 2.3 end }
 -- (c) the ore belt's run plate on the terrace
 K.plates[#K.plates + 1] = { id = "ps_belt", center = vec3(417.0, 2.85, 18.0),
     half = vec3(0.7, 0.3, 0.7), visY = 2.6 }
 -- (b) the ledge: a big cliff bell, full-charge only. Its collider is 2 x 2 x
 -- 1.4, so a crate stops 0.95 m from its centre: the detection box must
 -- reach past that (0.9 + the 0.3 pad) or a hit can bounce off unheard.
-K.bells[#K.bells + 1] = { id = "bS", name = "Srf Bell", center = vec3(431.0, 7.0, -43.2),
-    half = vec3(1.1, 1.1, 0.9), ringSpeed = 14.0 }
+-- Playtest: a throw aimed AT the bell sags ~2 m over 16 m and hit the cliff
+-- below it. The box therefore reaches down the cliff face (y 3.0 .. 8.8): any
+-- fast hit on the bell or its plate rings, so a thrower needs no lob.
+K.bells[#K.bells + 1] = { id = "bS", name = "Srf Bell", center = vec3(431.0, 5.9, -43.2),
+    half = vec3(1.3, 2.9, 0.9), ringSpeed = 14.0 }
 -- the junction (three power seats) + the ore-belt cradle (SPARK's deposit)
 local SEATS = {}
 for i, x in ipairs({ 404.2, 406.0, 407.8 }) do
@@ -813,7 +823,24 @@ local function hintFor(area)
     return "Bring the cells to the junction by the relay gate  (" .. seatedCount() .. "/3)"
 end
 
-local function updateAreas(pp, arrived)
+-- One soft hint per challenge, after ~40 s in the area without progress (a
+-- plate/bell/grab/cell change resets it). It points, it does not solve.
+local LINGER = {
+    ravine = "THE RAVINE: from up high, the glow looks closer",
+    ledge = "THE LEDGE: a tap will not carry that far",
+    belt = "THE ORE BELT: nothing survives the yard floor. Be there first",
+}
+local function lingerHint(area, dt)
+    local m = M()
+    local key = tostring(area) .. tostring(K.plateOn("ps_pad")) .. tostring(K.bellRung("bS"))
+        .. tostring(K.plateOn("ps_belt")) .. tostring(forge.player.holding()) .. seatedCount()
+        .. tostring(K.drone.station ~= nil)
+    if key ~= m.lingerKey then m.lingerKey, m.lingerT = key, 0 end
+    m.lingerT = (m.lingerT or 0) + dt
+    return m.lingerT >= 40.0 and LINGER[area] or nil
+end
+
+local function updateAreas(pp, arrived, dt)
     local m = M()
     local a = areaAt(pp)
     if arrived and a and a ~= m.area then -- respawn points only once really here
@@ -822,6 +849,10 @@ local function updateAreas(pp, arrived)
         m.visited[a] = true
     end
     local h = hintFor(m.area)
+    if Missions.status("signal") == 1 and not m.powered and not Missions.isDone("signal", ({
+        ravine = "ravine", ledge = "shed", belt = "belt" })[m.area or ""] or "-") then
+        h = lingerHint(m.area, dt) or h
+    end
     if h ~= m.hint then
         m.hint = h
         forge.hud.set_hint(h)
@@ -842,7 +873,7 @@ function S.update(dt, pp)
     updatePins(dt)
     updateWren(dt, pp)
     updateHazards(dt, pp)
-    updateAreas(pp, m.ride.phase == "done")
+    updateAreas(pp, m.ride.phase == "done", dt)
     if m.powerT > 0 then -- the tower answers: a flicker into full power
         m.powerT = m.powerT - dt
         local k = 0.6 + 0.4 * math.sin(m.powerT * 30.0)

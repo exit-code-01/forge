@@ -1224,6 +1224,7 @@ local droneYaw = 0
 local droneMood, droneMoodT = nil, 0 -- "happy" | "no", seconds remaining
 -- R17 soft hint: time in the room with the battery still behind glass, and
 -- the countdown to the next chirp (SPARK hovers at the pane, lowest priority).
+local fSnaps = {} -- F aim-assist targets, filled by the locations (surface.lua)
 local hint17 = { t = 0, chirp = 0, active = false, chirps = 0 }
 local HINT17_POS = vec3(-6.4, 1.3, -253.1)
 local function battery17Caged()
@@ -1296,6 +1297,16 @@ local function updateDrone(dt)
             else
                 local station = vec3(math.floor(hit.x * 2 + 0.5) / 2, hit.y + 0.9,
                                      math.floor(hit.z * 2 + 0.5) / 2)
+                -- aim assist (fSnaps: { at, r, station, when }): a far or hidden
+                -- SPARK spot takes the command from anywhere near it (a 0.1 m
+                -- plate seen at ~6 degrees would need a 0.3 degree aim)
+                for _, sn in ipairs(fSnaps) do
+                    local sx, sz = hit.x - sn.at.x, hit.z - sn.at.z
+                    if sx * sx + sz * sz < sn.r * sn.r and (not sn.when or sn.when(p)) then
+                        station = sn.station
+                        break
+                    end
+                end
                 local ok = true
                 for _, z in ipairs(noFly) do
                     if inBox(station, z.center, z.half, 0) then
@@ -1895,7 +1906,7 @@ end
 local FACILITY_CPS = #checkpoints
 VAULT = {
     state = state, plates = plates2, bells = bells2, sockets = sockets2, crates = roomCrates,
-    glasses = glasses2, doors = doors2, noFly = noFly, transparents = transparents,
+    glasses = glasses2, doors = doors2, noFly = noFly, transparents = transparents, fSnaps = fSnaps,
     checkpoints = checkpoints, drone = drone, crateTrack = crateTrack, belts = belts,
     run = run, cores = cores, ext = ext, glow = GLOW_TABLE, facilityCps = FACILITY_CPS,
     box = box, moveTowards = moveTowards, approach = approach, sendHome = sendHome,
