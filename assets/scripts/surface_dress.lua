@@ -22,6 +22,9 @@ function SURFACE_DRESS(K)
     -- "mesh" for a triangle collider from the model itself.
     -- A model that failed to import is SKIPPED (spawn would draw the cube
     -- fallback): the placeholder terrain stays and the gap is logged once.
+    -- the ramps are 23-27 degrees: at the default 0.5 a dropped crate or cell
+    -- slides to the bottom, where it used to rest on a step
+    local GRIP = { srf_terr_ramps = 1.8 }
     local function put(model, x, y, z, yaw, s, col, sy, fill)
         if not forge.scene.has_model(model) then
             missing[model] = (missing[model] or 0) + 1
@@ -33,7 +36,7 @@ function SURFACE_DRESS(K)
             -- the visual. Named "Dress Col" so the E prompt's line of sight
             -- (missions.lua) treats it as world geometry.
             forge.scene.spawn("Dress Col " .. n, vec3(x, y, z), vec3(s, sy or s, s), vec3(0, 0, 0), "", false,
-                              model, { collider = "mesh", yaw = yaw })
+                              model, { collider = "mesh", yaw = yaw, friction = GRIP[model] or 0.5 })
             if fill then forge.scene.setEmissive("Dress Col " .. n, fill) end
             return
         end
@@ -63,6 +66,7 @@ function SURFACE_DRESS(K)
     -- walkable ramps (tools/gen_ramps.py) laid over the step boxes.
     put("srf_terr_ground", 400, 0, 0, 0, 1, "mesh", nil, vec3(0.05, 0.062, 0.035))
     put("srf_terr_ramps", 400, 0, 0, 0, 1, "mesh", nil, vec3(0.09, 0.076, 0.058))
+    put("srf_terr_tops", 400, 0, 0, 0, 1, "mesh") -- platform tops: sunlit, no shade fill
 
     -- ---- cliff faces: one 6 m wall tile per cell on the innermost tier, a
     -- hand's width proud of the box face (the boxes stay the colliders).

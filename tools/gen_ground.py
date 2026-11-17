@@ -4,11 +4,11 @@ import json, math, os, struct, sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import gen_terrain as gt
 
-gt.MATS = [("grass_a", (0.33, 0.46, 0.22)), ("grass_b", (0.38, 0.50, 0.25)),
-           ("grass_dry", (0.47, 0.50, 0.28)), ("dirt", (0.55, 0.45, 0.33)),
+gt.MATS = [("grass_a", (0.33, 0.46, 0.22)), ("grass_b", (0.36, 0.48, 0.235)),
+           ("grass_dry", (0.42, 0.48, 0.26)), ("dirt", (0.55, 0.45, 0.33)),
            ("scree", (0.50, 0.46, 0.40))]
 GA, GB, GD, DIRT, SCREE = range(5)
-SEED, SEED2, SEEDM = 71, 113, 29
+SEED, SEED2, SEEDM, SEEDJ = 71, 113, 29, 211
 X0, X1, Z0, Z1 = 352.0, 448.0, -48.0, 48.0
 HOLES = [(366.0, 378.0, -1e9, 1e9), (398.5, 401.5, 34.0, 39.0)]
 SUPP = [(420, 442, -48, -38), (412, 448, -30, 36), (392, 408, 30, 48),
@@ -65,31 +65,65 @@ def lines(a, b, extra):
     return sorted(set([round(a + 1.5 * i, 4) for i in range(n + 1)] + list(extra)))
 
 
+def jitter_grid(xs, zs):
+    """Final (x, z) per grid index; frozen near boundary, holes and special lines."""
+    nx, nz = len(xs), len(zs)
+    def in_closed_hole(x, z):
+        return any(a <= x <= b and c <= z <= d for a, b, c, d in HOLES)
+    P = {}
+    for i in range(nx):
+        for j in range(nz):
+            x, z = xs[i], zs[j]
+            frozen = (i in (0, nx - 1) or j in (0, nz - 1) or x in (356.0, 444.0) or z in (-44.0, 44.0))
+            if not frozen:
+                for di in (-1, 0, 1):
+                    for dj in (-1, 0, 1):
+                        if in_closed_hole(xs[i + di], zs[j + dj]):
+                            frozen = True
+            if frozen:
+                P[(i, j)] = (x, z); continue
+            lx = 0.4 * min(x - xs[i - 1], xs[i + 1] - x)
+            lz = 0.4 * min(z - zs[j - 1], zs[j + 1] - z)
+            # sliver gaps (<1 m) next to special lines: keep that axis fixed
+            lx = lx if lx >= 0.4 else 0.0
+            lz = lz if lz >= 0.4 else 0.0
+            ox = (gt._hash(i, j, SEEDJ) * 2 - 1) * 0.5
+            oz = (gt._hash(i, j, SEEDJ + 1) * 2 - 1) * 0.5
+            P[(i, j)] = (x + max(-lx, min(lx, ox)), z + max(-lz, min(lz, oz)))
+    return P
+
+
+def pick_mat(p0, p1, p2):
+    cx = (p0[0] + p1[0] + p2[0]) / 3; cz = (p0[2] + p1[2] + p2[2]) / 3
+    if (p0[1] + p1[1] + p2[1]) / 3 > 0.12:
+        return SCREE
+    if is_dirt(cx, cz):
+        return DIRT
+    n = gt.fbm(cx / 7.0, cz / 7.0, SEEDM)
+    return GB if n > 0.62 else (GD if n < 0.36 else GA)
+
+
 def build():
     xs = lines(X0, X1, [366, 378, 398.5, 401.5, 356, 444])
     zs = lines(Z0, Z1, [34, 39, -44, 44])
     mesh = gt.Mesh()
-    V = lambda x, z: (x, h(x, z), z)
+    P = jitter_grid(xs, zs)
+    def V(i, j):
+        x, z = P[(i, j)]
+        return (x, h(x, z), z)
+    up = (0, 1, 0)
     for i in range(len(xs) - 1):
         for j in range(len(zs) - 1):
-            xa, xb, za, zb = xs[i], xs[i + 1], zs[j], zs[j + 1]
-            cx, cz = (xa + xb) / 2, (za + zb) / 2
+            cx, cz = (xs[i] + xs[i + 1]) / 2, (zs[j] + zs[j + 1]) / 2
             if in_hole(cx, cz):
                 continue
-            hc = (h(xa, za) + h(xb, za) + h(xa, zb) + h(xb, zb)) / 4
-            if hc > 0.12:
-                m = SCREE
-            elif is_dirt(cx, cz):
-                m = DIRT
-            else:
-                n = gt.fbm(cx / 7.0, cz / 7.0, SEEDM)
-                m = GB if n > 0.62 else (GD if n < 0.36 else GA)
-            p00, p10, p01, p11 = V(xa, za), V(xb, za), V(xa, zb), V(xb, zb)
-            up = (0, 1, 0)
+            p00, p10, p01, p11 = V(i, j), V(i + 1, j), V(i, j + 1), V(i + 1, j + 1)
             if (i + j) % 2 == 0:
-                mesh.add(m, p00, p10, p11, up); mesh.add(m, p00, p11, p01, up)
+                T = [(p00, p10, p11), (p00, p11, p01)]
             else:
-                mesh.add(m, p00, p10, p01, up); mesh.add(m, p10, p11, p01, up)
+                T = [(p00, p10, p01), (p10, p11, p01)]
+            for t in T:
+                mesh.add(pick_mat(*t), *t, up)
     return mesh
 
 
@@ -122,6 +156,7 @@ def check(path):
         assert uz * vx - ux * vz > 0, "normal y <= 0"
         cx = (a[0]+b[0]+c[0]) / 3 + gt.OX; cz = (a[2]+b[2]+c[2]) / 3
         assert not in_hole(cx, cz), "centroid in hole"
+        assert 0.5 * (uz * vx - ux * vz) > 0.02, "triangle too small"
     hv = {}
     for v in allv:
         x, z = round(v[0] + gt.OX, 3), round(v[2], 3)
@@ -136,6 +171,10 @@ def check(path):
     for (x, z), s in hv.items():
         if x in (366.0, 378.0) or (398.5 <= x <= 401.5 and z in (34.0, 39.0)) or (z in (34.0, 39.0) and x in (398.5, 401.5)):
             assert s == {0.0}, "hole-edge vertex nonzero"
+    for (x, z) in hv:
+        assert not in_hole(x, z), "vertex inside hole"
+        if x in (366.0, 378.0) or (398.5 <= x <= 401.5 and 34.0 <= z <= 39.0):
+            assert x in (366.0, 378.0, 398.5, 401.5) or z in (34.0, 39.0), "hole vertex"
     print("max y", max(v[1] for v in allv), "unique verts", len(hv))
     print("per material", {g["materials"][k]["name"]: sum(1 for _ in [0]) for k in range(0)} or [m["name"] for m in g["materials"]])
     print("CHECKS OK")

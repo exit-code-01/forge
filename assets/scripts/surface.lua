@@ -195,6 +195,11 @@ local ROCK2 = vec3(0.64, 0.57, 0.50)
 local ROCK3 = vec3(0.56, 0.50, 0.45)
 local DIRT = vec3(0.78, 0.66, 0.50)
 
+-- When the platform-top mesh is loaded (tools/gen_tops.py, ADR-032) it is the
+-- walking surface of the mesa, lookout, ledge, terrace and ore shelf at their
+-- exact heights, and the boxes sink 6 cm under it as backing.
+local function TOPS() return forge.scene.has_model("srf_terr_tops") and -0.06 or 0 end
+
 local function buildGround()
     -- valley floor, with holes for the ravine (x 366..378) and the lift pit.
     -- When the ground mesh is loaded (tools/gen_ground.py, ADR-032) IT is the
@@ -290,12 +295,12 @@ end
 local function buildRavine()
     -- the far rock (mesa) with SPARK's pad on top + a blue beacon you CAN see
     -- (wide top: a ray from the ground that clears the rim passes OVER the pad)
-    blk("Srf Mesa", 356.5, 363.1, -0.5, 4.5, -33.5, -26.9, "concrete", ROCK)
+    blk("Srf Mesa", 356.5, 363.1, -0.5, 4.5 + TOPS(), -33.5, -26.9, "concrete", ROCK)
     blk("Srf Mesa Beacon", 362.6, 362.85, 4.5, 6.6, -27.4, -27.15, "metal_blue", nil, false)
     forge.scene.setEmissive("Srf Mesa Beacon", vec3(0.25, 0.8, 2.6))
     prop("Srf Bridge", vec3(359.9, -0.3, -22.0), vec3(12.0, 0.3, 2.4), "metal_blue", true)
     -- the lookout: 1 m ledges up to a 6 m top, set back 6 m from the edge
-    blk("Srf Lookout", 384.0, 388.0, -0.5, 6.0, -30.0, -26.0, "concrete", ROCK)
+    blk("Srf Lookout", 384.0, 388.0, -0.5, 6.0 + TOPS(), -30.0, -26.0, "concrete", ROCK)
     for i = 1, 5 do
         local x0 = 388.0 + (5 - i) * 1.6
         blk("Srf Lookout L" .. i, x0, x0 + 1.6, -0.5, i * 1.0, -29.6, -26.4, "concrete",
@@ -305,7 +310,7 @@ end
 
 local function buildLedge()
     -- terrace B (4.5 m) + 0.3 m stairs from the west
-    blk("Srf Ledge", 418, 444, -0.5, 4.5, -28, -16, "concrete", ROCK2)
+    blk("Srf Ledge", 418, 444, -0.5, 4.5 + TOPS(), -28, -16, "concrete", ROCK2)
     for i = 1, 14 do
         local x0 = 418 - 0.6 * (15 - i)
         blk("Srf Ledge Step " .. i, x0, x0 + 0.6, -0.5, 0.3 * i, -20, -17.6, "concrete",
@@ -329,7 +334,7 @@ end
 
 local function buildBelt()
     -- terrace C (2.5 m) + 0.25 m stairs from the west
-    blk("Srf Terrace C", 414, 424, -0.5, 2.5, 8, 28, "concrete", ROCK)
+    blk("Srf Terrace C", 414, 424, -0.5, 2.5 + TOPS(), 8, 28, "concrete", ROCK)
     for i = 1, 9 do
         local x0 = 414 - 0.6 * (10 - i)
         blk("Srf Terrace Step " .. i, x0, x0 + 0.6, -0.5, 0.25 * i, 22, 24.4, "concrete",
@@ -341,7 +346,7 @@ local function buildBelt()
     blk("Srf Arc Fence S", 424, 433, 0, 2.2, 32.85, 33.15, "hazard")
     blk("Srf Arc Fence W1", 423.85, 424.15, 0, 2.2, 6.15, 8.0, "hazard")
     blk("Srf Arc Fence W2", 423.85, 424.15, 0, 2.2, 28.0, 32.85, "hazard")
-    blk("Srf Ore Shelf", 433, 444, -0.5, 6.0, 6, 33, "concrete", ROCK2)
+    blk("Srf Ore Shelf", 433, 444, -0.5, 6.0 + TOPS(), 6, 33, "concrete", ROCK2)
     -- the belt on its gantry: a hopper tower at the south end, legs east
     blk("Srf Hopper", 424.8, 427.2, 0, 8.44, 29.4, 32.6, "metal_dark")
     prop("Srf Belt", vec3(426.0, 8.47, 25.0), vec3(1.1, 0.06, 12.0), "belt", true)

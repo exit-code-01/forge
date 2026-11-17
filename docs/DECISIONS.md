@@ -973,3 +973,22 @@ and down the ledge ramp and up the terrace ramp and onto a scree bank. NOT
 verified: props thrown or dropped on the ramps (they will slide on a 26
 degree slope where they used to rest on a step), SPARK's flight over the
 banks, and the lookout, whose 1 m jump ledges are deliberately still boxes.
+
+SECOND ADDENDUM to ADR-032, same day. (1) Platform tops: `srf_terr_tops`
+(tools/gen_tops.py, 1,622 triangles) is the walking surface of the mesa, the
+lookout, the ledge, terrace C and the ore shelf, exactly at 4.5 / 6.0 / 4.5 /
+2.5 / 6.0 m, with a 0.15 m rim skirt; surface.lua sinks those five boxes 6 cm
+when it is loaded. Built structures (head-house, shed, fences, tower, belt)
+stay boxes on purpose: they are boxes. (2) The ground mesh's vertices are
+jittered up to 0.5 m and its colour is chosen per triangle, so patches no
+longer follow the grid; the flat zone and the hole edges are unchanged.
+(3) The ramps spawn with friction 1.8: at the default 0.5 a crate set down
+on the 27 degree ramp slid to the foot. Verified in the engine: rays find the
+tops mesh at 4.500, 2.500, 6.000 and 6.000 m (the mesa ray hits SPARK's pad
+plate at 4.600, as it should); a crate placed on each ramp moves under 0.2 m
+and stops; SPARK stationed over a 0.51 m scree bank settles with 0.92 m
+clearance. NOT verified: a crate THROWN at a ramp still tumbles down it
+(dropped from 0.7 m it bounced to the foot), which is physics, not a bug;
+flat faces toward the sun show a strong specular glare from mesh.frag's fixed
+roughness (ENGINE_GAPS), more visible now that the tops are pale rock.
+

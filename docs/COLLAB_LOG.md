@@ -60,3 +60,9 @@ Machine or permission blockers go here (rule 10 in CLAUDE.md).
 - Floor and stairs are meshes now: `srf_terr_ground` (7,890 triangles, the floor collider at y = 0, scree banks at the cliff feet, dirt paths) and `srf_terr_ramps` (ramps over both stair runs). Generators: tools/gen_ground.py, tools/gen_ramps.py (written by two cheaper-model subagents to a spec, checked offline by them and in the engine by the owner-side agent). surface.lua sinks the ground boxes 6 cm when the ground mesh is loaded.
 - As run on this state: test_surface 126/126, no validation messages, Surface frame 42.6 ms avg; keyboard walk up/down the ramps and onto a bank works. test_all 51/51 and test_mesh 16/16 on this state too.
 - Heads-up C1: the Surface now has about 24,000 collider/visual triangles of terrain in the shadow pass.
+
+### 15:30 owner/O1-O2 — STATUS
+- Platform tops are a mesh collider now (`srf_terr_tops`, tools/gen_tops.py); their five boxes sink 6 cm under it. Ground patches de-blocked (jittered vertices, per-triangle colour). Ramps spawn with friction 1.8 so props set down on them stay.
+- Checked in the engine: top heights by raycast, crates resting on both ramps, SPARK stationed over a scree bank (0.92 m clearance). test_surface 126/126, no validation messages, Surface frame 43.3 ms avg.
+- NOTE for C1 (renderer): sun-facing flat faces glare white (fixed roughness 0.35 in mesh.frag); with the ambient request, a per-material or per-entity roughness would fix both. Not urgent.
+- Generators again written by cheaper-model subagents to a spec and checked offline by them; in-engine checks by the owner-side agent.
