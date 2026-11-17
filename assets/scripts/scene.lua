@@ -1,4 +1,4 @@
--- assets/scripts/scene.lua — VAULT: tutorial + rooms 1-14, all Lua data.
+-- assets/scripts/scene.lua — VAULT: tutorial + seventeen rooms, all Lua data.
 -- Hot-reloadable logic; GEOMETRY spawns once per run (restart to reshape).
 -- Layout runs NORTH (-z): tutorial | R1 carry | R2 laser-park | R3 throw |
 -- R4 timed plate sprint | R5 drone intro | R6 plate+drone-beam | R7 glass wall |
@@ -7,9 +7,33 @@
 -- R11 range (week 12: charged launch + resonance bells) |
 -- R12 errand (week 12: F sends SPARK where you aim) |
 -- R13 alley-oop (week 12: SPARK catches your launches; heavy flies alone) |
--- R14 duet (week 12: parallel lanes, every verb) | end pad.
+-- R14 duet (week 12: parallel lanes, every verb) |
+-- R15 belt (a conveyor that reverses under weight) | R16 carousel (an
+-- electrified pit and a lift that only runs while weighed) | R17 reactor
+-- (route a beam with a prism, power the socket) | end pad.
 -- Drone: Q parks/recalls at fixed spots (unchanged); F is the week-12 verb —
 -- point anywhere, SPARK stations there, presses plates, CATCHES light crates.
+
+-- ---- Glow by colour language -------------------------------------------
+-- Setting a texture also sets the matching emissive (linear HDR; >1 blooms).
+-- The wrapper is installed once per process (globals survive hot reload).
+GLOW_TABLE = {
+    metal_green  = vec3(0.10, 0.85, 0.22),
+    metal_red    = vec3(0.24, 0.022, 0.014),
+    metal_orange = vec3(0.30, 0.13, 0.02),
+    metal_blue   = vec3(0.06, 0.22, 0.70),
+    metal_yellow = vec3(0.45, 0.36, 0.04),
+    metal_violet = vec3(0.28, 0.08, 0.55),
+    laser        = vec3(6.0, 0.5, 0.35),
+}
+local ZERO_GLOW = vec3(0, 0, 0)
+if not RAW_SET_TEXTURE then
+    RAW_SET_TEXTURE = forge.scene.setTexture
+    forge.scene.setTexture = function(name, tex)
+        RAW_SET_TEXTURE(name, tex)
+        forge.scene.setEmissive(name, GLOW_TABLE[tex] or ZERO_GLOW)
+    end
+end
 
 -- ---- Tutorial wiring (bespoke; the rooms use the generic systems below) --
 local plate = {
@@ -38,7 +62,8 @@ local glass = {
     breakSpeed = 4.5,
     broken = false,
 }
-local winZ = -210.6 -- past room 14's exit (week 12 moved the finish line)
+local winZ = -269.8 -- on the end pad behind Door 17 (the finish line moved twice)
+local X = -3.0      -- rooms 15-17 (and the end pad) are centred on world x = -3
 
 -- ---- Generic puzzle data: rooms 1-8 -------------------------------------
 local plates2 = { -- parkId: a parked drone counts as weight
@@ -68,11 +93,24 @@ local plates2 = { -- parkId: a parked drone counts as weight
     -- delivers the heavy cube there. p14: R14's stage-2 plate, visible only
     -- through the divider glass — SPARK's errand, or a very good throw.
     { id = "p12",  center = vec3(0.0, 0.35, -170.9),  half = vec3(0.8, 0.3, 0.8),
-      latch = true, offTex = "metal_blue", visScale = vec3(1.6, 0.2, 1.6) },
+      latch = true, offTex = "metal_blue", visScale = vec3(1.6, 0.2, 1.6),
+      noPlayer = true }, -- a sprint-jump clears the chasm: only SPARK may press it
     { id = "p13h", center = vec3(2.5, 1.55, -187.6),  half = vec3(0.9, 0.35, 0.9),
       visY = 1.3, visScale = vec3(1.8, 0.2, 1.8) },
     { id = "p14",  center = vec3(3.5, 0.55, -203.4),  half = vec3(0.75, 0.5, 0.75),
       visScale = vec3(1.5, 0.2, 1.5) },
+    -- R15 The Belt: p15r (south half) reverses the belt, p15a (past the belt's
+    -- north end, a thin slab flush under the belt top) opens Gate 15, p15b
+    -- (north half) opens Door 15.
+    { id = "p15r", center = vec3(-6.0, 0.35, -217.4), half = vec3(0.7, 0.3, 0.7) },
+    -- (half z 0.35: it only reads once the crate is fully OFF the belt volume)
+    { id = "p15a", center = vec3(1.0, 0.35, -227.8),  half = vec3(0.7, 0.3, 0.35),
+      visY = 0.05, visScale = vec3(1.6, 0.1, 1.6) },
+    { id = "p15b", center = vec3(-6.0, 0.35, -226.5), half = vec3(0.7, 0.3, 0.7) },
+    -- R16 The Carousel: p16s powers the lift; p16n (SPARK only) opens Door 16.
+    { id = "p16s", center = vec3(0.5, 0.35, -233.5),  half = vec3(0.7, 0.3, 0.7) },
+    { id = "p16n", center = vec3(-6.5, 0.35, -247.9), half = vec3(0.7, 0.3, 0.7),
+      noPlayer = true },
 }
 -- Resonance bells (week 12): impact targets. A crate crossing the bell's
 -- AABB above ringSpeed RINGS it (latched signal, green); slower hits thunk
@@ -96,10 +134,16 @@ local bells2 = {
 local sockets2 = {
     { id = "s13", name = "Socket 13", seat = vec3(-3.0, 1.45, -188.5) },
     { id = "s14", name = "Socket 14", seat = vec3(3.5, 1.05, -207.4) },
+    -- R17: a POWER socket. Only the battery seats here (`only`); every other
+    -- socket rejects the battery and the prism (see socketAccepts).
+    { id = "s17", name = "Socket 17", seat = vec3(1.0, 2.56, -264.0), only = "Battery 17",
+      offTex = "metal_yellow", sfxOn = "assets/sounds/power_up.wav",
+      sfxOff = "assets/sounds/power_down.wav" },
 }
 -- F-command no-fly volumes (refusal grammar: SPARK head-shakes at these).
 local noFly = {
     { center = vec3(0.0, 1.0, -166.9), half = vec3(5.0, 2.8, 2.6) }, -- R12 chasm
+    { center = vec3(-3.0, -0.8, -241.0), half = vec3(5.9, 0.9, 5.0) }, -- R16 pit (below floor)
 }
 -- See-through-but-solid panes the AIM ray passes through (R14's divider
 -- glass): you can SEE the target, you can't BE there — but SPARK can.
@@ -130,6 +174,9 @@ local glasses2 = { -- scale/halfE: what resetGame re-spawns (Glass 10 is x-thin)
     -- bell behind (the shot carries through).
     { name = "Glass 11", center = vec3(-3.0, 1.05, -154.8), half = vec3(1.3, 1.2, 0.4),
       scale = vec3(2.2, 2.1, 0.12), halfE = vec3(1.1, 1.05, 0.06) },
+    -- R17: the battery alcove's east-facing pane (x-thin, like Glass 10).
+    { name = "Glass 17", center = vec3(-7.8, 1.05, -253.1), half = vec3(0.4, 1.2, 1.3),
+      scale = vec3(0.12, 2.1, 2.2), halfE = vec3(0.06, 1.05, 1.1) },
 }
 -- Every throwable crate as DATA (name + spawn), so buildRooms spawns them and
 -- week-6 respawn/reset can return them home. Tutorial crates (A/B/C) are
@@ -156,6 +203,11 @@ local roomCrates = {
     { name = "Heavy R13",  pos = vec3(3.5, 0.6, -176.8) },  -- spawned bespoke (2.4x mass read)
     { name = "Crate R14a", pos = vec3(-3.5, 0.4, -195.8) }, -- duet lane ammunition
     { name = "Crate R14b", pos = vec3(-4.5, 0.4, -196.6) },
+    { name = "Crate R15",  pos = vec3(-4.0, 0.4, -216.0) }, -- rides the belt
+    { name = "Crate R16",  pos = vec3(-6.0, 0.4, -233.0) }, -- rides the lift (or sits on p16s)
+    { name = "Crate R17",  pos = vec3(-1.0, 0.4, -253.5) }, -- R17's light cube: throw it through the glass
+    { name = "Prism 17",   pos = vec3(0.0, 0.36, -254.0) }, -- spawned bespoke (R17)
+    { name = "Battery 17", pos = vec3(-8.9, 0.36, -252.6) }, -- spawned bespoke (alcove)
 }
 -- Checkpoints (week 6): the deepest reached room entrance. Player falls into a
 -- void (or presses R) -> respawn here. z is the near-wall the player crosses;
@@ -170,11 +222,14 @@ end
 -- R14's entry is at ledge height (the Cor13 step-down): spawn a touch high
 -- and let the drop land on the vestibule steps.
 checkpoints[#checkpoints + 1] = { z = -193.4, pos = vec3(0, 2.6, -194.4) }
+for _, nz in ipairs({ -213.4, -231.4, -251.4 }) do -- R15, R16, R17 (centred on X)
+    checkpoints[#checkpoints + 1] = { z = nz, pos = vec3(X, 1.5, nz - 1.6) }
+end
 local curCp = 1
 -- Run progress (week 10): 'furthest' is what the host persists. curCp rewinds
 -- on restart/respawn; furthest never does — Continue means "my best run".
 local furthest = 1
-local state = { plates = {}, lasers = {}, bells = {}, sockets = {} } -- id -> signal
+local state = { plates = {}, lasers = {}, bells = {}, sockets = {}, circuit = false } -- id -> signal
 local function plateOn(id) return state.plates[id] == true end
 local function beamCut(id) return state.lasers[id] == true end
 local function bellRung(id) return state.bells[id] == true end
@@ -217,6 +272,13 @@ local doors2 = {
     ["Gate 14a"] = { x = -3.15, z = -201.4, cond = function() return bellRung("b14") end },
     ["Gate 14b"] = { x = -3.15, z = -204.9, cond = function() return plateOn("p14") end },
     ["Door 14"] = { x = -3.0, z = -209.4, cond = function() return socketFilled("s14") end },
+    -- R15-R17 (centred on X). Gate 15 is the player gate in the divider.
+    ["Gate 15"] = { x = X, z = -221.4, cond = function() return plateOn("p15a") end },
+    ["Door 15"] = { x = X, z = -229.4, cond = function() return plateOn("p15b") end },
+    ["Door 16"] = { x = X, z = -249.4, cond = function() return plateOn("p16n") end },
+    ["Door 17"] = { x = X, z = -267.4, cond = function()
+        return state.circuit == true and socketFilled("s17")
+    end },
 }
 for _, d in pairs(doors2) do -- x: sideways-facing gates sit off the room axis
     if d.closedPos then     -- explicit path (the bridge slides, not lifts)
@@ -249,16 +311,18 @@ local drone = {
     trust = false,    -- flips on the first successful catch (the arc)
     -- Room-flagged behaviors (the game's most trusted signals must never
     -- fire where they would mislead): catcher stance + bell curiosity.
-    catcherZones = { { zMin = -191.4, zMax = -175.4 }, { zMin = -209.4, zMax = -193.4 } },
+    catcherZones = { { zMin = -191.4, zMax = -175.4 }, { zMin = -209.4, zMax = -193.4 },
+                     { zMin = -267.4, zMax = -251.4 } }, -- R13, R14, R17
     bellZone = { zMin = -157.4, zMax = -139.4 },
 }
 
 -- ---- Room construction ----------------------------------------------------
 -- mesh (optional, week 11): a model-registry name; nil means the unit cube.
 -- Models are authored in unit bounds, so scale keeps meaning what it meant.
-local function box(name, pos, scale, tex, solid, dynamic, mesh)
+local function box(name, pos, scale, tex, solid, dynamic, mesh, opts)
     local half = solid and vec3(scale.x * 0.5, scale.y * 0.5, scale.z * 0.5) or vec3(0, 0, 0)
-    forge.scene.spawn(name, pos, scale, half, tex, dynamic or false, mesh)
+    forge.scene.spawn(name, pos, scale, half, tex, dynamic or false, mesh, opts)
+    forge.scene.setEmissive(name, GLOW_TABLE[tex] or ZERO_GLOW)
 end
 
 local function shell(id, z0, z1, w) -- floor + side walls (z0 > z1)
@@ -483,8 +547,147 @@ local function buildDuet()
     box("End Pad", vec3(-3, -0.2, -211.4), vec3(3.0, 0.4, 4.0), "floor", true)
     box("End Wall W", vec3(-4.3, 1.6, -211.4), vec3(0.4, 3.6, 4.0), "concrete", true)
     box("End Wall E", vec3(-1.7, 1.6, -211.4), vec3(0.4, 3.6, 4.0), "concrete", true)
-    box("End Cap", vec3(-3, 1.6, -213.2), vec3(3.0, 3.6, 0.4), "concrete", true)
+    -- (the old "End Cap" is gone: the pad is a passage into R15 now)
 end
+
+-- ---- X-offset builder variants (rooms 15-17 are centred on world x = X) ----
+-- opts.depth: side walls extend down to -depth (R16's pit); opts.noFloor.
+local function xShell(id, z0, z1, w, opts)
+    opts = opts or {}
+    local cz, L = (z0 + z1) * 0.5, z0 - z1
+    local depth = opts.depth or 0.2
+    local wallH = 3.4 + depth
+    local wallY = (3.4 - depth) * 0.5
+    if not opts.noFloor then
+        box(id .. " Floor", vec3(X, -0.2, cz), vec3(w, 0.4, L), "floor", true)
+    end
+    box(id .. " Wall W", vec3(X - w * 0.5, wallY, cz), vec3(0.4, wallH, L), "concrete", true)
+    box(id .. " Wall E", vec3(X + w * 0.5, wallY, cz), vec3(0.4, wallH, L), "concrete", true)
+end
+
+local function xFramedWall(id, z, w) -- full wall with a 2.2m doorway gap at X
+    local seg = (w - 2.2) * 0.5
+    local cx = 1.1 + seg * 0.5
+    box(id .. " W", vec3(X - cx, 1.6, z), vec3(seg, 3.6, 0.4), "concrete", true)
+    box(id .. " E", vec3(X + cx, 1.6, z), vec3(seg, 3.6, 0.4), "concrete", true)
+    box(id .. " Top", vec3(X, 3.0, z), vec3(2.2, 0.8, 0.4), "concrete", true)
+end
+
+local function xCorridor(id, z0) -- 2m long, walls FLUSH with the 2.2m frames
+    box(id .. " Floor", vec3(X, -0.2, z0 - 1.0), vec3(3.0, 0.4, 2.0), "floor", true)
+    box(id .. " Wall W", vec3(X - 1.3, 1.6, z0 - 1.0), vec3(0.4, 3.6, 2.0), "concrete", true)
+    box(id .. " Wall E", vec3(X + 1.3, 1.6, z0 - 1.0), vec3(0.4, 3.6, 2.0), "concrete", true)
+end
+
+local function xDoor(name, z)
+    box(name, vec3(X, 1.25, z), vec3(2.2, 2.5, 0.32), "metal_red", true, false, "door")
+end
+
+-- R15 The Belt: a divider with the player gate and a belt-high slot. Crates
+-- ride the belt through the slot; the player cannot fit through it.
+local belts -- forward (defined with the conveyor system below)
+local function buildBelt()
+    xShell("R15", -213.4, -229.4, 12)
+    xFramedWall("R15 NearWall", -213.4, 12)
+    xFramedWall("R15 FarWall", -229.4, 12)
+    xDoor("Door 15", -229.4)
+    -- divider z -221.4: west | gate (x -4.1..-1.9) | mid | slot (x 0.4..1.6) | east
+    box("R15 Div W", vec3(-6.55, 1.6, -221.4), vec3(4.9, 3.6, 0.4), "concrete", true)
+    box("R15 Div M", vec3(-0.75, 1.6, -221.4), vec3(2.3, 3.6, 0.4), "concrete", true)
+    box("R15 Div E", vec3(2.3, 1.6, -221.4), vec3(1.4, 3.6, 0.4), "concrete", true)
+    box("R15 Gate Top", vec3(X, 3.0, -221.4), vec3(2.2, 0.8, 0.4), "concrete", true)
+    box("R15 Slot Top", vec3(1.0, 2.225, -221.4), vec3(1.2, 2.35, 0.4), "concrete", true)
+    xDoor("Gate 15", -221.4)
+    -- the belt slab (top y 0.12) and the low backstops beyond both ends
+    box("Belt 15", vec3(1.0, 0.06, -221.4), vec3(1.1, 0.12, 11.0), "belt", true)
+    box("R15 Stop S", vec3(1.0, 0.25, -215.7), vec3(2.0, 0.5, 0.3), "metal_orange", true)
+    box("R15 Stop N", vec3(1.0, 0.25, -228.95), vec3(2.0, 0.5, 0.3), "metal_orange", true)
+    -- travelling pips: tiny emissive bars that sell the direction
+    for i = 1, 7 do
+        box("Pip 15 " .. i, vec3(1.0, 0.135, -216.0), vec3(0.8, 0.02, 0.1), "metal_white", false)
+        forge.scene.setEmissive("Pip 15 " .. i, vec3(0.5, 1.3, 1.9))
+    end
+    xCorridor("Cor15", -229.4)
+end
+
+-- R16 The Carousel: solid floor only at the two ends (2 m thick so the pit
+-- has faces), an electrified pit between, a kinematic lift across it.
+local function buildCarousel()
+    xShell("R16", -231.4, -249.4, 12, { noFloor = true, depth = 2.0 })
+    xFramedWall("R16 NearWall", -231.4, 12)
+    xFramedWall("R16 FarWall", -249.4, 12)
+    xDoor("Door 16", -249.4)
+    box("R16 Floor S", vec3(X, -1.0, -233.7), vec3(12, 2.0, 4.6), "floor", true)
+    box("R16 Floor N", vec3(X, -1.0, -247.7), vec3(12, 2.0, 3.4), "floor", true)
+    box("R16 Pit Floor", vec3(X, -1.8, -241.0), vec3(12, 0.4, 10.0), "hazard", true)
+    forge.scene.setEmissive("R16 Pit Floor", vec3(0.55, 0.07, 0.04))
+    box("R16 Rim S", vec3(X, 0.03, -235.85), vec3(11.2, 0.06, 0.3), "metal_red", true)
+    box("R16 Rim N", vec3(X, 0.03, -246.15), vec3(11.2, 0.06, 0.3), "metal_red", true)
+    -- four decorative tesla coils on the pit floor (tops above floor level)
+    for i, c in ipairs({ { -8.0, -237.0 }, { 2.0, -237.0 }, { -8.0, -245.0 }, { 2.0, -245.0 } }) do
+        box("Tesla 16 " .. i, vec3(c[1], -0.4, c[2]), vec3(0.7, 2.4, 0.7), "metal_white", false,
+            false, "tesla")
+    end
+    -- Lift 16: KINEMATIC, top flush with the floor; setPosition sweeps it
+    forge.scene.spawn("Lift 16", vec3(X, -0.15, -237.25), vec3(2.6, 0.3, 2.4),
+                      vec3(1.3, 0.15, 1.2), "metal_yellow", false, nil, { kinematic = true })
+    forge.scene.setEmissive("Lift 16", GLOW_TABLE.metal_yellow)
+    xCorridor("Cor16", -249.4)
+end
+
+-- R17 The Reactor: emitter -> prism -> receiver; a battery behind glass; a
+-- power socket; Door 17 wants both.
+local function buildReactor()
+    xShell("R17", -251.4, -267.4, 14)
+    xFramedWall("R17 NearWall", -251.4, 14)
+    xFramedWall("R17 FarWall", -267.4, 14)
+    xDoor("Door 17", -267.4)
+    -- emitter on the east wall (fires -x), receiver on the north wall (faces +z)
+    box("Emitter 17", vec3(3.6, 0.35, -258.0), vec3(0.3, 0.3, 0.3), "laser", true, false,
+        "emitter")
+    forge.scene.setRotation("Emitter 17", vec3(0, 180, 0))
+    box("Receiver 17", vec3(-6.0, 0.35, -267.05), vec3(0.3, 0.3, 0.3), "laser", true, false,
+        "receiver")
+    forge.scene.setRotation("Receiver 17", vec3(0, 90, 0))
+    box("Beam 17a", vec3(-1.0, 0.35, -258.0), vec3(8.0, 0.05, 0.05), "laser", false)
+    box("Beam 17b", vec3(-6.0, 0.35, -262.0), vec3(0.001, 0.001, 0.001), "laser", false)
+    box("Marker 17", vec3(-6.0, 0.03, -258.0), vec3(1.0, 0.06, 1.0), "metal_violet", false)
+    -- the power socket (a cradle; the battery seats inside it)
+    -- raised on a pillar the player cannot reach: SPARK carries the battery up
+    -- (blue marker on the floor = SPARK's station, like R13's alley-oop)
+    box("Pillar 17", vec3(1.0, 1.1, -264.0), vec3(1.0, 2.2, 1.0), "concrete", true)
+    box("Socket 17", vec3(1.0, 2.65, -264.0), vec3(1.0, 0.9, 1.0), "metal_yellow", false,
+        false, "socket")
+    box("Marker 17s", vec3(1.0, 0.03, -262.5), vec3(1.2, 0.06, 1.2), "metal_blue", false)
+    -- battery alcove, SW corner: x -9.8..-7.8, z -251.6..-254.6. North wall
+    -- closes it; the east face is a framed, breakable pane.
+    box("Alcove 17 N", vec3(-8.8, 1.6, -254.8), vec3(2.4, 3.6, 0.4), "concrete", true)
+    box("Alcove 17 E1", vec3(-7.8, 1.6, -251.8), vec3(0.4, 3.6, 0.4), "concrete", true)
+    box("Alcove 17 E2", vec3(-7.8, 1.6, -254.4), vec3(0.4, 3.6, 0.4), "concrete", true)
+    box("Alcove 17 Top", vec3(-7.8, 2.75, -253.1), vec3(0.4, 1.3, 2.2), "concrete", true)
+    box("Glass 17", vec3(-7.8, 1.05, -253.1), vec3(0.12, 2.1, 2.2), "glass", true)
+    -- prism + battery: bespoke bodies (axis-locked)
+    forge.scene.spawn("Prism 17", vec3(0.0, 0.36, -254.0), vec3(0.7, 0.7, 0.7),
+                      vec3(0.35, 0.35, 0.35), "metal_violet", true, "prism",
+                      { lockRotation = true })
+    forge.scene.setEmissive("Prism 17", GLOW_TABLE.metal_violet)
+    forge.scene.spawn("Battery 17", vec3(-8.9, 0.36, -252.6), vec3(0.5, 0.7, 0.5),
+                      vec3(0.25, 0.35, 0.25), "metal_yellow", true, "battery",
+                      { lockRotation = true })
+    forge.scene.setEmissive("Battery 17", vec3(1.8, 1.4, 0.12)) -- a clear yellow beacon
+    -- end pad behind Door 17 (crossing winZ wins)
+    box("End Pad 17", vec3(X, -0.2, -269.6), vec3(3.0, 0.4, 4.4), "floor", true)
+    box("End 17 Wall W", vec3(X - 1.3, 1.6, -269.6), vec3(0.4, 3.6, 4.4), "concrete", true)
+    box("End 17 Wall E", vec3(X + 1.3, 1.6, -269.6), vec3(0.4, 3.6, 4.4), "concrete", true)
+    box("End 17 Cap", vec3(X, 1.6, -272.0), vec3(3.0, 3.6, 0.4), "concrete", true)
+end
+
+-- Data cores (8 hidden collectibles). #8 sits in R17's battery alcove.
+CORE_POS = {
+    vec3(5.5, 2.9, -5.5), vec3(-4.2, 0.9, -42.6), vec3(4.2, 0.9, -78.6),
+    vec3(6.0, 0.9, -118.0), vec3(-6.8, 0.9, -136.6), vec3(-5.2, 0.9, -156.6),
+    vec3(5.2, 2.1, -190.6), vec3(-9.0, 0.9, -253.9),
+}
 
 local function buildRooms()
     if roomsBuilt then return end
@@ -537,40 +740,37 @@ local function buildRooms()
     buildErrand()
     buildAlleyOop()
     buildDuet()
+    -- seventeen-room extension: belt, carousel, reactor (all centred on X)
+    buildBelt()
+    buildCarousel()
+    buildReactor()
+    -- data cores: colliderless, spinning, emissive cyan (logic in updateCores)
+    for i, c in ipairs(CORE_POS) do
+        box("Core " .. i, c, vec3(0.35, 0.35, 0.35), "metal_white", false, false, "core")
+        forge.scene.setEmissive("Core " .. i, vec3(0.4, 1.6, 2.2))
+    end
     -- SPARK (week 11): a real body + eye rig instead of the glass box. Both
     -- colliderless — pure Lua steering, and setRotation only moves visuals.
     -- Blue eye by the colour law: blue = SPARK/drone.
     box("Drone", vec3(1.0, 2.4, 3.0), vec3(1, 1, 1), "metal", false, false, "drone_body")
     box("Drone Eye", vec3(1.0, 2.4, 2.78), vec3(1, 1, 1), "metal_blue", false, false, "drone_eye")
-    forge.log("rooms 1-14 built (week 12: the launch pass - bells, F command, catch)")
+    forge.log("rooms 1-17 built (belt, carousel, reactor on top of the week-12 launch pass)")
 end
 
 -- ---------------------------------------------------------------------------
 local spawnCount = 0
 local won = false
 
-function onStart()
-    forge.log("scene.lua loaded (" .. _VERSION .. ")")
-    buildRooms()
-    -- Colour language (week 9): the host spawned the tutorial props before
-    -- the law existed — retint them. red = locked, orange = interactable.
-    forge.scene.setTexture("Exit Door", "metal_red")
-    forge.scene.setTexture("Plate T", "metal_orange")
-    -- Week 5 audio beds: persistent looping voices (own volume). Guarded so a
-    -- hot-reload of this script doesn't stack a second copy on top.
-    if not audioStarted then
-        audioStarted = true
-        forge.audio.loop("assets/sounds/ambient.wav", 0.30) -- HVAC room tone
-        forge.audio.loop("assets/sounds/music.wav", 0.22)   -- minor pad underscore
-    end
-    forge.log("Q: park/recall drone (rooms 5, 6, 8)  F: send drone where you aim (week 12)")
-end
+-- (onStart lives below roomLight/roomHint, which it reads)
 
 -- Per-room lighting pass (week 5): key-light colour by player z (rgb * HDR
 -- intensity; default warm facility key is (3.0, 2.9, 2.7)). Read most-negative
 -- first since the layout runs north (-z).
 local function roomLight(z)
-    if z <= -210.6 then return vec3(2.6, 3.4, 2.6)      -- end pad: success glow
+    if z <= winZ then return vec3(2.6, 3.4, 2.6)        -- end pad: success glow
+    elseif z <= -251.4 then return vec3(2.2, 3.0, 3.4)  -- R17 reactor: cold cyan
+    elseif z <= -231.4 then return vec3(3.4, 2.5, 2.2)  -- R16 carousel: hot electric amber
+    elseif z <= -213.4 then return vec3(3.3, 3.0, 2.2)  -- R15 belt: industrial yellow
     elseif z <= -193.4 then return vec3(2.8, 2.6, 3.4)  -- R14 duet: violet finale
     elseif z <= -175.4 then return vec3(2.4, 2.9, 3.3)  -- R13 alley-oop: trust teal
     elseif z <= -159.4 then return vec3(3.3, 2.4, 2.5)  -- R12 errand: hazard red
@@ -593,7 +793,10 @@ local curLight = vec3(3.0, 2.9, 2.7)
 -- Objective hints (week 7 QoL): one line per room, host draws it top-centre.
 -- Same most-negative-first z ladder as roomLight.
 local function roomHint(z)
-    if z <= -210.6 then return "VAULT cleared. Head for the light."
+    if z <= winZ then return "VAULT cleared. Head for the light."
+    elseif z <= -251.4 then return "R17: the door wants the beam on the receiver AND a battery in the high socket - the battery is behind glass; SPARK can carry it up"
+    elseif z <= -231.4 then return "R16: the lift runs only while the south plate is weighed - SPARK can hold it"
+    elseif z <= -213.4 then return "R15: the belt reverses while you stand on the plate - send the crate through the slot"
     elseif z <= -193.4 then return "R14: two lanes, one team - what you see through the glass, SPARK can reach"
     elseif z <= -175.4 then return "R13: SPARK catches light crates (F a spot, then launch) - the heavy one flies alone"
     elseif z <= -159.4 then return "R12: aim at the far pad and press F - SPARK flies where you point"
@@ -612,6 +815,7 @@ local function roomHint(z)
     end
 end
 local curHint = nil
+
 
 local function moveTowards(from, to, maxStep)
     local d = vec3(to.x - from.x, to.y - from.y, to.z - from.z)
@@ -678,14 +882,30 @@ local function updateCrateTracking(dt)
         -- under-read whenever a slow frame simulates less time than it took
         -- (the anti-spiral clamp), which gutted every impact threshold.
         if not tr.id then
-            local ids = forge.physics.overlap(at, vec3(0.5, 0.5, 0.5))
-            if #ids == 1 then tr.id = ids[1] end
+            local bid = forge.scene.bodyId(c.name)
+            if bid ~= 0 then tr.id = bid end -- 0 = unknown (not spawned yet)
         end
+        tr.sfxT = math.max((tr.sfxT or 0) - dt, 0)
         if tr.id and drone.carrying ~= c.name then
             local v = forge.physics.velocity(tr.id)
             local prev = tr.speed or 0
             tr.vx, tr.vy, tr.vz = v.x, v.y, v.z
             tr.speed = math.sqrt(v.x * v.x + v.y * v.y + v.z * v.z)
+            -- Impact sounds: a big one-frame speed drop is a landing/collision
+            -- (not for glove-held or drone-carried crates), 0.15 s per crate.
+            local drop = prev - tr.speed
+            if drop > 3.0 and tr.sfxT <= 0 and forge.player.holding() ~= c.name then
+                tr.sfxT = 0.15
+                tr.impacts = (tr.impacts or 0) + 1
+                local hard = drop > 8.0
+                forge.audio.play_at(hard and "assets/sounds/impact_hard.wav"
+                                          or "assets/sounds/impact_soft.wav",
+                                    at, hard and 1.0 or 0.8, 0.9 + math.random() * 0.2)
+                if hard then
+                    local pl = forge.player.position()
+                    if (pl - at):length() < 6.0 then forge.camera.shake(0.15) end
+                end
+            end
             -- Impact speed: by the frame the segment test sees the crate
             -- inside a target's AABB, Jolt may have already resolved the
             -- contact and REFLECTED the velocity — the approach speed one
@@ -841,6 +1061,13 @@ end
 -- Snap-sockets: the forgiveness basin. Lands close and slow -> eased into
 -- the seat; resting in the seat is the (continuous) signal. Heavy crates
 -- and glove-held crates are never eased.
+-- Who may seat where: a socket with `only` takes that entity alone; the
+-- others take light crates only (never heavy cubes, the battery or the prism).
+local function socketAccepts(s, name)
+    if s.only then return name == s.only end
+    return name:sub(1, 5) ~= "Heavy" and name ~= "Battery 17" and name ~= "Prism 17"
+end
+
 local function updateSockets(dt, pp)
     for _, s in ipairs(sockets2) do
         local occupied = false
@@ -850,7 +1077,7 @@ local function updateSockets(dt, pp)
             keepD2, keepDy = 0.30, 0.55
         end
         for _, c in ipairs(roomCrates) do
-            if c.name:sub(1, 5) ~= "Heavy" and drone.carrying ~= c.name then
+            if socketAccepts(s, c.name) and drone.carrying ~= c.name then
                 local at = forge.scene.getPosition(c.name)
                 local dx, dy, dz = at.x - s.seat.x, at.y - s.seat.y, at.z - s.seat.z
                 local d2 = dx * dx + dz * dz
@@ -873,7 +1100,10 @@ local function updateSockets(dt, pp)
         if occupied ~= (state.sockets[s.id] == true) then
             state.sockets[s.id] = occupied
             forge.audio.play(occupied and "assets/sounds/clunk.wav" or "assets/sounds/grab.wav")
-            forge.scene.setTexture(s.name, occupied and "metal_green" or "metal_orange")
+            if s.sfxOn then
+                forge.audio.play(occupied and s.sfxOn or s.sfxOff)
+            end
+            forge.scene.setTexture(s.name, occupied and "metal_green" or (s.offTex or "metal_orange"))
             forge.fx.burst(s.seat, 10)
             forge.log("socket " .. s.id .. (occupied and ": filled" or ": empty"))
         end
@@ -962,6 +1192,17 @@ end
 local droneTime = 0
 local droneYaw = 0
 local droneMood, droneMoodT = nil, 0 -- "happy" | "no", seconds remaining
+-- R17 soft hint: time in the room with the battery still behind glass, and
+-- the countdown to the next chirp (SPARK hovers at the pane, lowest priority).
+local hint17 = { t = 0, chirp = 0, active = false, chirps = 0 }
+local HINT17_POS = vec3(-6.4, 1.3, -253.1)
+local function battery17Caged()
+    local gl
+    for _, g in ipairs(glasses2) do if g.name == "Glass 17" then gl = g end end
+    if not gl or gl.broken then return false end
+    local b = forge.scene.getPosition("Battery 17")
+    return b.x < -7.8 and b.z < -251.6 and b.z > -254.6
+end
 local atan2 = math.atan2 or math.atan -- two-arg atan across Lua versions
 -- Yaw (deg) that points the model's -Z forward along (dx, dz).
 local function yawToward(dx, dz) return math.deg(atan2(-dx, -dz)) end
@@ -971,6 +1212,11 @@ local function updateDrone(dt)
     droneTime = droneTime + dt
     local p = forge.player.position()
     local at = forge.scene.getPosition(drone.name)
+    -- The glove wins: grabbing what SPARK carries makes SPARK let go.
+    if drone.carrying and forge.player.holding() == drone.carrying then
+        drone.carrying = nil
+        drone.deposit = nil
+    end
     if forge.input.pressed("q") then
         -- The drone ANSWERS (week 9, SPARK spirit): happy double-beep for a
         -- command it takes, a low buzz for "nothing to hold here". Q is the
@@ -1087,6 +1333,16 @@ local function updateDrone(dt)
     drone.failT = math.max(drone.failT - dt, 0)
     drone.celebrateT = math.max(drone.celebrateT - dt, 0)
 
+    -- R17 soft hint timer: counts only while the player is in the reactor
+    -- with the battery still caged; any other state resets it.
+    if p.z <= -251.4 and p.z > -267.4 and battery17Caged() then
+        hint17.t = hint17.t + dt
+    else
+        hint17.t, hint17.active = 0, false
+    end
+    hint17.chirp = math.max(hint17.chirp - dt, 0)
+    hint17.active = hint17.t >= 45.0 and not drone.carrying
+
     -- Movement target, by priority: fail-sink > deposit run > station >
     -- park > reunion orbit > shoulder cruise.
     local target
@@ -1094,6 +1350,11 @@ local function updateDrone(dt)
         target = vec3(drone.station.x, drone.station.y - 0.75, drone.station.z)
     elseif drone.carrying and drone.deposit then
         target = vec3(drone.deposit.x, drone.deposit.y + 1.15, drone.deposit.z)
+        -- a RAISED seat (R17's pillar): climb straight up first so the
+        -- hanging crate clears the pillar's edge, then slide across
+        if drone.deposit.y > 2.0 and at.y < drone.deposit.y + 0.55 then
+            target = vec3(at.x, drone.deposit.y + 1.15, at.z)
+        end
     elseif drone.station then
         target = drone.station
     elseif drone.parkedAt then
@@ -1103,9 +1364,24 @@ local function updateDrone(dt)
         target = vec3(p.x + math.cos(a) * 1.6,
                       p.y + 0.6 + (6.0 - drone.celebrateT) * 0.35,
                       p.z + math.sin(a) * 1.6)
+    elseif hint17.active then
+        target = HINT17_POS -- lowest priority: hover in front of the caged battery
     else
         -- cruise ABOVE the walls toward a spot beside/ahead of the player
         target = vec3(p.x + 1.0, 4.2, p.z - 1.3)
+    end
+    local hintMode = hint17.active and not drone.station and not drone.parkedAt
+                     and not (drone.failT > 0) and not drone.carrying
+                     and drone.celebrateT <= 0
+    if hintMode then
+        local hx, hy, hz = at.x - HINT17_POS.x, at.y - HINT17_POS.y, at.z - HINT17_POS.z
+        if hx * hx + hy * hy + hz * hz < 0.25 and hint17.chirp <= 0 then
+            hint17.chirp = 20.0
+            hint17.chirps = hint17.chirps + 1
+            forge.audio.play("assets/sounds/chirp_hint.wav")
+            droneMood, droneMoodT = "happy", 0.6
+            forge.log("drone: hint chirp (battery behind glass)")
+        end
     end
     local speed = (drone.station or drone.celebrateT > 0) and 9.0 or drone.speed
     local nextPos = moveTowards(at, target, speed * dt)
@@ -1150,6 +1426,9 @@ local function updateDrone(dt)
         wantYaw = yawToward(mx, mz)
     else
         wantYaw = yawToward(p.x - at.x, p.z - at.z)
+        if hintMode then -- look at the pane
+            wantYaw = yawToward(-7.8 - at.x, -253.1 - at.z)
+        end
         -- Bell curiosity (R11 only, room-flagged): when idle, glance at the
         -- nearest unrung bell — a zero-cost hint in the learned grammar.
         if not drone.station and not drone.parkedAt and p.z <= drone.bellZone.zMax
@@ -1253,6 +1532,342 @@ local function respawnPlayer()
     forge.log("respawn at checkpoint " .. curCp)
 end
 
+-- Send a throwable home: release it from the glove and from SPARK first.
+local function sendHome(c)
+    if forge.player.holding() == c.name then forge.player.drop() end
+    if drone.carrying == c.name then
+        drone.carrying = nil
+        drone.deposit = nil
+    end
+    forge.scene.setPosition(c.name, c.pos)
+    local id = forge.scene.bodyId(c.name)
+    if id ~= 0 then forge.physics.set_velocity(id, vec3(0, 0, 0)) end
+end
+
+-- =========================================================================
+-- Rooms 15-17 + run systems: conveyor, lift, pit, tesla coils, reactor,
+-- data cores, run timer. Order of update calls lives in onUpdate.
+-- =========================================================================
+HUM = HUM or {} -- loop handles survive hot reload (never stack a second copy)
+
+local function approach(v, target, step)
+    if math.abs(target - v) <= step then return target end
+    return v + (target > v and step or -step)
+end
+
+local function inZ(p, a, b) return p.z <= a and p.z >= b end
+
+-- ---- Run stats ----------------------------------------------------------
+local run = { t = 0, shown = -1, eligible = true }
+local function fmtTime(s)
+    s = math.floor(s)
+    return string.format("%d:%02d", s // 60, s % 60)
+end
+local function refreshBest()
+    local b = forge.game.load("best_time")
+    forge.hud.set_stat("BEST", (b and b > 0) and fmtTime(b) or "")
+end
+local function updateRunTimer(dt)
+    if won then return end
+    run.t = run.t + dt
+    local whole = math.floor(run.t)
+    if whole ~= run.shown then
+        run.shown = whole
+        forge.hud.set_stat("TIME", fmtTime(run.t))
+    end
+end
+
+-- ---- Data cores ---------------------------------------------------------
+local cores = { got = {}, n = 0, t = 0 }
+local function updateCores(dt, pp)
+    cores.t = cores.t + dt
+    for i, base in ipairs(CORE_POS) do
+        if not cores.got[i] then
+            local name = "Core " .. i
+            local pos = vec3(base.x, base.y + math.sin(cores.t * 1.7 + i) * 0.1, base.z)
+            forge.scene.setPosition(name, pos)
+            forge.scene.setRotation(name, vec3(0, cores.t * 70 + i * 45, 0))
+            forge.render.light("core" .. i, pos, vec3(0.08, 0.32, 0.45), 3.0)
+            if (pp - pos):length() < 1.2 then
+                cores.got[i] = true
+                cores.n = cores.n + 1
+                forge.scene.setPosition(name, vec3(0, -100, 0))
+                forge.render.clear_light("core" .. i)
+                forge.audio.play("assets/sounds/pickup.wav", 0.9)
+                forge.fx.burst(pos, 22, vec3(0.3, 1.4, 2.0))
+                forge.hud.toast("DATA CORE " .. cores.n .. "/8", 2.5)
+                forge.hud.set_stat("CORES", cores.n .. "/8")
+                forge.log("core " .. i .. " collected (" .. cores.n .. "/8)")
+                if cores.n == #CORE_POS then
+                    forge.audio.play("assets/sounds/secret.wav", 1.0)
+                    forge.hud.toast("ALL DATA CORES RECOVERED", 4.0)
+                    forge.log("all data cores recovered")
+                end
+                if cores.n > forge.game.load("cores_best") then
+                    forge.game.save("cores_best", cores.n)
+                end
+            end
+        end
+    end
+end
+
+-- ---- R15: conveyors -------------------------------------------------------
+-- Dynamic bodies in the belt's volume get the belt's horizontal velocity
+-- (vertical kept); a grounded player on it is carried with player.push.
+belts = {
+    { id = "b15", name = "Belt 15", x = 1.0, z0 = -215.9, z1 = -226.9, hw = 0.55, speed = 2.2,
+      cur = 2.2, off = 0, pips = "Pip 15 ", npips = 7, zMin = -229.4, zMax = -213.4,
+      hum = "belt",
+      dirFn = function() return plateOn("p15r") and -1 or 1 end }, -- -1 = north
+}
+local function updateBelts(dt, pp)
+    local held = forge.player.holding()
+    for _, b in ipairs(belts) do
+        local sgn = b.dirFn()
+        if sgn ~= b.sgn then
+            b.sgn = sgn -- chevrons point north unrotated; flip them for south
+            forge.scene.setRotation(b.name, vec3(0, sgn > 0 and 180 or 0, 0))
+        end
+        b.cur = approach(b.cur, sgn * b.speed, 12.0 * dt)
+        local zc, hl = (b.z0 + b.z1) * 0.5, math.abs(b.z0 - b.z1) * 0.5
+        for _, id in ipairs(forge.physics.overlap(vec3(b.x, 0.5, zc), vec3(b.hw, 0.45, hl))) do
+            local nm = forge.scene.bodyName(id)
+            if nm ~= held and nm ~= drone.carrying then
+                local v = forge.physics.velocity(id)
+                if math.abs(v.x) > 0.01 or math.abs(v.z - b.cur) > 0.01 then
+                    forge.physics.kick(id, vec3(-v.x, 0, b.cur - v.z)) -- kick wakes sleepers
+                end
+            end
+        end
+        if forge.player.grounded() and math.abs(pp.x - b.x) <= b.hw
+           and pp.z <= b.z0 and pp.z >= b.z1 and pp.y > 0.3 and pp.y < 1.6 then
+            forge.player.push(vec3(0, 0, b.cur))
+        end
+        local L = math.abs(b.z1 - b.z0)
+        b.off = (b.off - b.cur * dt) % L
+        for i = 1, b.npips do
+            local s = ((i - 1) * L / b.npips + b.off) % L
+            forge.scene.setPosition(b.pips .. i, vec3(b.x, 0.135, b.z0 - s))
+        end
+        if HUM[b.hum] then
+            forge.audio.set_volume(HUM[b.hum], inZ(pp, b.zMax, b.zMin) and 0.35 or 0.0)
+        end
+    end
+end
+
+-- ---- R16: lift, pit, tesla coils ------------------------------------------
+local lift = { zS = -237.25, zN = -244.75, speed = 1.6, z = -237.25, dwell = 0, north = true,
+               moving = false }
+local function updateLift(dt, pp)
+    local powered = plateOn("p16s")
+    local prev = lift.z
+    if not powered then
+        lift.north, lift.dwell = true, 0 -- return to the south dock and wait
+        lift.z = approach(lift.z, lift.zS, lift.speed * dt)
+    elseif lift.dwell > 0 then
+        lift.dwell = lift.dwell - dt
+    else
+        local tz = lift.north and lift.zN or lift.zS
+        lift.z = approach(lift.z, tz, lift.speed * dt)
+        if lift.z == tz then
+            lift.dwell = 2.0
+            lift.north = not lift.north
+        end
+    end
+    forge.scene.setPosition("Lift 16", vec3(X, -0.15, lift.z))
+    lift.moving = math.abs(lift.z - prev) > 1e-6
+    if HUM.lift then
+        forge.audio.set_volume(HUM.lift,
+            (lift.moving and inZ(pp, -231.4, -249.4)) and 0.35 or 0.0)
+    end
+end
+
+local pit = { zMin = -246.0, zMax = -236.0, xMin = -8.8, xMax = 2.8, cool = 0 }
+local tesla = {}
+for i, c in ipairs({ { -8.0, -237.0 }, { 2.0, -237.0 }, { -8.0, -245.0 }, { 2.0, -245.0 } }) do
+    tesla[i] = { pos = vec3(c[1], 0.6, c[2]), t = (i - 1) * 0.8, flash = 0 }
+end
+local ZAP_COL = vec3(0.7, 1.0, 3.0)
+local function inPit(p)
+    return p.x >= pit.xMin and p.x <= pit.xMax and p.z <= pit.zMax and p.z >= pit.zMin
+end
+local function updatePit(dt, pp)
+    pit.cool = pit.cool - dt
+    if pp.y < -0.3 and inPit(pp) and pit.cool <= 0 then
+        pit.cool = 1.0
+        forge.audio.play("assets/sounds/zap.wav", 1.0)
+        forge.camera.shake(0.7)
+        forge.fx.burst(pp, 36, ZAP_COL)
+        forge.log("pit: ZAP player")
+        respawnPlayer()
+    end
+    for _, c in ipairs(roomCrates) do
+        local at = forge.scene.getPosition(c.name)
+        if at.y < -0.9 and at.y > -4.0 and inPit(at) then
+            forge.audio.play_at("assets/sounds/zap.wav", at, 1.0)
+            forge.fx.burst(at, 24, ZAP_COL)
+            forge.log("pit: ZAP " .. c.name)
+            sendHome(c)
+        end
+    end
+    -- decorative coils (ambient only): charge whine, then an arc + flash
+    if pp.z < -214.0 and pp.z > -262.0 then
+        for i, ts in ipairs(tesla) do
+            local prev = ts.t
+            ts.t = ts.t + dt
+            if ts.t >= 3.2 then
+                ts.t = ts.t - 3.2
+                forge.audio.play_at("assets/sounds/tesla_charge.wav", ts.pos, 0.8)
+            end
+            if prev < 1.0 and ts.t >= 1.0 then
+                forge.audio.play_at("assets/sounds/zap.wav", ts.pos, 0.7)
+                forge.fx.burst(ts.pos, 12, ZAP_COL)
+                ts.flash = 0.18
+            end
+            if ts.flash > 0 then
+                ts.flash = ts.flash - dt
+                forge.render.light("tesla" .. i, ts.pos, vec3(0.8, 1.6, 6.0), 8.0)
+                if ts.flash <= 0 then forge.render.clear_light("tesla" .. i) end
+            end
+        end
+    end
+end
+
+-- ---- R17: the reactor circuit ---------------------------------------------
+local RX = { o = vec3(3.3, 0.35, -258.0), marker = vec3(-6.0, 0.36, -258.0), recvFace = -266.9 }
+local function updateReactor(dt)
+    -- forgiveness: a loose, slow prism near the marker eases onto it
+    local pat = forge.scene.getPosition("Prism 17")
+    local tr = crateTrack["Prism 17"]
+    local held = forge.player.holding() == "Prism 17"
+    local dx, dz = pat.x - RX.marker.x, pat.z - RX.marker.z
+    local dh = math.sqrt(dx * dx + dz * dz)
+    if not held and drone.carrying ~= "Prism 17" and tr and tr.speed < 1.5
+       and dh < 0.7 and dh > 0.005 then
+        pat = moveTowards(pat, vec3(RX.marker.x, pat.y, RX.marker.z), 1.5 * dt)
+        forge.scene.setPosition("Prism 17", pat)
+        local id = forge.scene.bodyId("Prism 17")
+        if id ~= 0 then forge.physics.set_velocity(id, vec3(0, 0, 0)) end
+    end
+    local o = RX.o
+    local hid, hd = forge.physics.raycast(o, vec3(-1, 0, 0), 16.0)
+    hd = hd or 16.0
+    local onPrism = hid ~= nil and forge.scene.bodyName(hid) == "Prism 17"
+    forge.scene.setPosition("Beam 17a", vec3(o.x - hd * 0.5, o.y, o.z))
+    forge.scene.setScale("Beam 17a", vec3(hd, 0.05, 0.05))
+    local connected = false
+    if onPrism then
+        local o2 = vec3(pat.x, 0.35, pat.z - 0.45)
+        local _, d2 = forge.physics.raycast(o2, vec3(0, 0, -1), 14.0)
+        d2 = d2 or 14.0
+        forge.scene.setPosition("Beam 17b", vec3(o2.x, o2.y, o2.z - d2 * 0.5))
+        forge.scene.setScale("Beam 17b", vec3(0.05, 0.05, d2))
+        local reach = o2.z - RX.recvFace
+        connected = math.abs(pat.x - RX.marker.x) <= 0.2 and d2 >= reach - 0.12
+    else
+        forge.scene.setScale("Beam 17b", vec3(0.001, 0.001, 0.001))
+    end
+    -- The empty socket ASKS for power: slow yellow pulse + dim yellow light;
+    -- once powered, the socket's own steady green (set on fill) takes over.
+    if state.sockets.s17 ~= true then
+        local k = 0.5 + 0.5 * math.sin(droneTime * 2.0)
+        forge.scene.setEmissive("Socket 17", vec3(0.25 + 1.5 * k, 0.2 + 1.2 * k, 0.02 + 0.12 * k))
+        forge.render.light("sock17", vec3(1.0, 3.3, -263.6), vec3(1.0 + 0.8 * k, 0.8 + 0.6 * k, 0.1), 3.5)
+    else
+        forge.render.light("sock17", vec3(1.0, 3.3, -263.6), vec3(0.1, 0.8, 0.2), 3.0)
+    end
+    if connected ~= state.circuit then
+        state.circuit = connected
+        local rpos = forge.scene.getPosition("Receiver 17")
+        forge.audio.play(connected and "assets/sounds/prism.wav" or "assets/sounds/chirp_sad.wav")
+        forge.scene.setTexture("Receiver 17", connected and "metal_green" or "laser")
+        forge.fx.burst(rpos, 14, connected and vec3(0.3, 2.0, 0.6) or vec3(2.0, 0.4, 0.3))
+        forge.log("reactor: circuit " .. (connected and "CONNECTED" or "DISCONNECTED"))
+    end
+end
+
+-- Mood kit: one point light per room, red lights at emitters, SPARK's eye.
+local lightRooms = {}
+for i, z0 in ipairs({ -9.4, -21.4, -33.4, -45.4, -57.4, -69.4, -81.4, -93.4 }) do
+    lightRooms[i] = { x = 0, z0 = z0, len = 10 }
+end
+for _, r in ipairs({ { 0, -105.4, 14 }, { 0, -121.4, 16 }, { 0, -139.4, 18 }, { 0, -159.4, 14 },
+                     { 0, -175.4, 16 }, { 0, -193.4, 16 }, { X, -213.4, 16 }, { X, -231.4, 18 },
+                     { X, -251.4, 16 } }) do
+    lightRooms[#lightRooms + 1] = { x = r[1], z0 = r[2], len = r[3] }
+end
+
+-- ==== DEMO: skinned character (ADR-030) =================================
+-- A KayKit knight (assets/models/knight.glb, CC0) idles on the tutorial
+-- floor, in view of the player spawn, and cross-fades into a cheer every
+-- few seconds: the smallest end-to-end use of forge.anim (spawn, play,
+-- cross-fade, time). Decorative and colliderless, so no puzzle changes.
+-- To move or remove it: this block plus its two calls (onStart, onUpdate).
+local KNIGHT = { name = "Demo Knight", pos = vec3(-2.4, 0.0, -0.8), yaw = 22,
+                 period = 6.0, fade = 0.35, wait = 0.0, cheering = false }
+local function knightDemoSpawn()
+    if forge.scene.exists(KNIGHT.name) then return end
+    forge.scene.spawn(KNIGHT.name, KNIGHT.pos, vec3(1, 1, 1), vec3(0, 0, 0), "", false, "knight")
+    forge.scene.setRotation(KNIGHT.name, vec3(0, KNIGHT.yaw, 0)) -- face the spawn point
+    forge.anim.play(KNIGHT.name, "Idle", { fade = 0 })
+end
+local function knightDemoUpdate(dt)
+    local t, len = forge.anim.time(KNIGHT.name)
+    if not t then return end -- no renderer / no animator: nothing to drive
+    if KNIGHT.cheering then
+        if t >= len - KNIGHT.fade then -- start the fade back before the clip ends
+            forge.anim.play(KNIGHT.name, "Idle", { fade = KNIGHT.fade })
+            KNIGHT.cheering, KNIGHT.wait = false, 0.0
+        end
+    else
+        KNIGHT.wait = KNIGHT.wait + dt
+        if KNIGHT.wait >= KNIGHT.period then
+            forge.anim.play(KNIGHT.name, "Cheer", { loop = false, fade = KNIGHT.fade })
+            KNIGHT.cheering = true
+        end
+    end
+end
+-- ==== end DEMO ==========================================================
+
+function onStart()
+    forge.log("scene.lua loaded (" .. _VERSION .. ") - seventeen rooms")
+    buildRooms()
+    knightDemoSpawn() -- DEMO (ADR-030): skinned character, see the block above
+    -- Colour language (week 9): the host spawned the tutorial props before
+    -- the law existed — retint them. red = locked, orange = interactable.
+    forge.scene.setTexture("Exit Door", "metal_red")
+    forge.scene.setTexture("Plate T", "metal_orange")
+    -- Week 5 audio beds: persistent looping voices (own volume). Guarded so a
+    -- hot-reload of this script doesn't stack a second copy on top.
+    if not audioStarted then
+        audioStarted = true
+        forge.audio.loop("assets/sounds/ambient.wav", 0.30) -- HVAC room tone
+        forge.audio.loop("assets/sounds/music.wav", 0.22)   -- minor pad underscore
+    end
+    if not HUM.belt then HUM.belt = forge.audio.loop("assets/sounds/hum_belt.wav", 0.0) end
+    if not HUM.lift then HUM.lift = forge.audio.loop("assets/sounds/hum_platform.wav", 0.0) end
+    -- Mood kit (idempotent: same ids overwrite): fog, one light per room,
+    -- a small red light at every laser emitter.
+    forge.render.set_fog(vec3(0.020, 0.024, 0.034), 0.010)
+    forge.render.light("room_tut", vec3(0, 3.0, 0), roomLight(0) * 0.55, 9.0)
+    for i, r in ipairs(lightRooms) do
+        forge.render.light("room_" .. i, vec3(r.x, 3.0, r.z0 - r.len * 0.5),
+                           roomLight(r.z0 - 1.0) * 0.55, 9.0)
+    end
+    local red = vec3(2.5, 0.25, 0.15)
+    forge.render.light("emit_tut", laser.origin, red, 3.5)
+    for _, lz in ipairs(lasers2) do
+        forge.render.light("emit_" .. lz.id, lz.origin, red, 3.5)
+    end
+    forge.render.light("emit_17", vec3(3.3, 0.35, -258.0), red, 3.5)
+    -- R17: a warm glow inside the battery alcove so the pane draws the eye
+    forge.render.light("alcove_17", vec3(-8.8, 1.6, -253.1), vec3(2.6, 1.8, 0.3), 4.0)
+    forge.hud.set_stat("CORES", cores.n .. "/8")
+    forge.hud.set_stat("TIME", fmtTime(run.t))
+    refreshBest()
+    forge.log("Q: park/recall drone (rooms 5, 6, 8)  F: send drone where you aim (week 12)")
+end
+
 -- Continue (week 10): the host calls this with the persisted checkpoint when
 -- the player picks Continue on the title. A fresh-state run that starts deep:
 -- every room is self-contained (its crates spawn in-room), so no latch replay
@@ -1264,7 +1879,25 @@ function resumeAt(cp)
     end
     forge.player.teleport(checkpoints[curCp].pos)
     forge.audio.play("assets/sounds/chime.wav", 0.6)
+    run.eligible = false -- a warped run never sets a best time
     forge.log("continue: resumed at checkpoint " .. curCp)
+end
+
+-- Return the CURRENT room's props (spawn z between this checkpoint and the
+-- next) to their spawn points, released from the glove and from SPARK.
+local function resetRoomProps()
+    local zTop = checkpoints[curCp].z
+    local zBot = checkpoints[curCp + 1] and checkpoints[curCp + 1].z or -1e9
+    local n = 0
+    for _, c in ipairs(roomCrates) do
+        if c.pos.z <= zTop and c.pos.z > zBot then
+            sendHome(c)
+            n = n + 1
+        end
+    end
+    hint17.t, hint17.chirp, hint17.active = 0, 0, false
+    forge.log("room reset: " .. n .. " props returned")
+    return n
 end
 
 local function updateRespawn(p)
@@ -1278,9 +1911,14 @@ local function updateRespawn(p)
             forge.game.save_checkpoint(furthest)
         end
     end
-    -- Player fell into a void, or asked for a manual respawn (R).
-    if p.y < voidY or forge.input.pressed("r") then
+    -- Player fell into a void: respawn the player only.
+    if p.y < voidY then
         respawnPlayer()
+    end
+    -- R: respawn AND reset the current room's props.
+    if forge.input.pressed("r") then
+        respawnPlayer()
+        resetRoomProps()
     end
     -- Crates that fell out come home (closes the corridor-void loss bug).
     for _, c in ipairs(roomCrates) do
@@ -1298,12 +1936,30 @@ function resetGame()
     curCp = 1
     won = false
     for _, c in ipairs(roomCrates) do
-        forge.scene.setPosition(c.name, c.pos)
+        sendHome(c)
     end
     state.plates = {}
     state.lasers = {}
     state.bells = {}
     state.sockets = {}
+    state.circuit = false
+    hint17.t, hint17.chirp, hint17.active, hint17.chirps = 0, 0, false, 0
+    -- rooms 15-17: lift home, belt south, coils re-phased, reactor dark
+    lift.z, lift.dwell, lift.north, lift.moving = lift.zS, 0, true, false
+    forge.scene.setPosition("Lift 16", vec3(X, -0.15, lift.zS))
+    for _, b in ipairs(belts) do b.cur, b.off, b.sgn = b.speed, 0, nil end
+    for i, ts in ipairs(tesla) do
+        ts.t, ts.flash = (i - 1) * 0.8, 0
+        forge.render.clear_light("tesla" .. i)
+    end
+    pit.cool = 0
+    forge.scene.setTexture("Receiver 17", "laser")
+    forge.scene.setScale("Beam 17b", vec3(0.001, 0.001, 0.001))
+    -- data cores come back; the run clock restarts and is best-time eligible
+    cores.got, cores.n = {}, 0
+    forge.hud.set_stat("CORES", "0/8")
+    run.t, run.shown, run.eligible = 0, -1, true
+    forge.hud.set_stat("TIME", "0:00")
     for _, d in pairs(doors2) do d.want = false end
     for _, pl in ipairs(plates2) do pl.timer = nil end -- timed plates disarm
     drone.parkedAt = nil
@@ -1330,7 +1986,7 @@ function resetGame()
         forge.scene.setTexture(b.name, "metal_orange")
         forge.scene.setRotation(b.name, b.baseRot or vec3(0, 0, 0))
     end
-    for _, s in ipairs(sockets2) do forge.scene.setTexture(s.name, "metal_orange") end
+    for _, s in ipairs(sockets2) do forge.scene.setTexture(s.name, s.offTex or "metal_orange") end
     forge.hud.set_reticle("default", 0)
     for _, lz in ipairs(lasers2) do
         forge.scene.setTexture("Receiver " .. lz.id:gsub("^l", ""), "laser")
@@ -1440,12 +2096,14 @@ function onUpdate(dt)
     -- ---- Drone + plate visuals ----
     updateDrone(dt)
     updatePlateVisuals(dt)
+    -- SPARK's eye is a small cool light that travels with it
+    forge.render.light("spark", forge.scene.getPosition("Drone Eye"), vec3(0.3, 0.8, 2.2), 4.0)
 
     -- ---- Rooms 1-8 generic systems ----
     for _, pl in ipairs(plates2) do
         local raw = #forge.physics.overlap(pl.center, pl.half) > 0
                     or (pl.parkId ~= nil and droneAt(pl.parkId))
-                    or playerNear(pl.center, pl.half, pp)
+                    or (not pl.noPlayer and playerNear(pl.center, pl.half, pp))
                     or droneStationedOn(pl) -- week 12: F-stationed SPARK is weight
         if pl.latch and state.plates[pl.id] == true then
             raw = true -- latched plates hold their signal (R12's bridge)
@@ -1525,6 +2183,24 @@ function onUpdate(dt)
         end
     end
 
+    -- ---- Rooms 15-17 + run systems (after the plates: they read plate state;
+    -- the circuit they set reaches Door 17 on the next frame) ----
+    updateBelts(dt, pp)
+    updateLift(dt, pp)
+    updatePit(dt, pp)
+    updateReactor(dt)
+    updateCores(dt, pp)
+    updateRunTimer(dt)
+    knightDemoUpdate(dt) -- DEMO (ADR-030): skinned character cross-fades
+
+    if DBG and DBG.tick then -- dev scripting hook: a failing tick never kills onUpdate
+        local ok, err = pcall(DBG.tick, dt)
+        if not ok then
+            forge.log("DBG.tick error: " .. tostring(err))
+            DBG.tick = nil
+        end
+    end
+
     -- ---- Win ----
     if not won then
         local p = forge.player.position()
@@ -1532,8 +2208,17 @@ function onUpdate(dt)
             won = true
             forge.audio.play("assets/sounds/kick.wav")
             forge.audio.play("assets/sounds/chime.wav")
+            forge.audio.play("assets/sounds/fanfare.wav")
             forge.fx.burst(vec3(p.x, p.y + 0.5, p.z), 30)
-            forge.log("*** VAULT RUN COMPLETE: all 14 rooms ***")
+            if run.eligible then
+                local best = forge.game.load("best_time")
+                if not best or best <= 0 or run.t < best then
+                    forge.game.save("best_time", run.t)
+                    forge.log("new best time " .. fmtTime(run.t))
+                end
+            end
+            refreshBest()
+            forge.log("*** VAULT RUN COMPLETE: all 17 rooms (" .. fmtTime(run.t) .. ") ***")
             forge.game.win() -- raise the win screen (host owns the menu)
         end
     end
@@ -1551,3 +2236,15 @@ function onUpdate(dt)
         forge.log("crate drop! total spawned: " .. spawnCount)
     end
 end
+
+-- Dev scripting surface (FORGE_DEV console): one global, inert in play. Set
+-- DBG.tick = function(dt) ... end from build/_cmd.lua to drive timed checks.
+local prevTick = DBG and DBG.tick
+DBG = {
+    state = state, plates = plates2, doors = doors2, crates = roomCrates, sockets = sockets2,
+    glasses = glasses2, checkpoints = checkpoints, drone = drone, lift = lift, belts = belts,
+    hint17 = hint17, cores = cores, run = run, pit = pit, tesla = tesla, crateTrack = crateTrack,
+    sendHome = sendHome, resetRoom = resetRoomProps, respawn = respawnPlayer, reset = resetGame,
+    cp = function() return curCp end, isWon = function() return won end,
+    tick = prevTick,
+}
