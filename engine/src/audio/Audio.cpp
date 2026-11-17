@@ -2,6 +2,9 @@
 #include "forge/audio/Audio.hpp"
 #include "forge/core/Log.hpp"
 
+#include <glm/geometric.hpp>
+
+#include <algorithm>
 #include <memory>
 #include <unordered_map>
 #include <vector>
@@ -43,6 +46,25 @@ struct Audio::Impl {
     // Looping voices keyed by handle (ambient/music). Persist until stop().
     std::unordered_map<uint32_t, std::unique_ptr<ma_sound>> loops;
     uint32_t nextHandle = 1; // 0 stays reserved for the null handle
+    glm::vec3 listenerPos{0.0f};
+    glm::vec3 listenerRight{1.0f, 0.0f, 0.0f};
+
+    void start(const std::string& path, float volume, float pitch, float pan) {
+        // A self-owned voice with its OWN volume — overlapping plays mix, and
+        // one quiet SFX no longer drags the whole mix down.
+        auto snd = std::make_unique<ma_sound>();
+        const ma_result r = ma_sound_init_from_file(&engine, path.c_str(), MA_SOUND_FLAG_DECODE,
+                                                    nullptr, nullptr, snd.get());
+        if (r != MA_SUCCESS) {
+            FORGE_WARN("audio: failed to load {} (result {})", path, static_cast<int>(r));
+            return;
+        }
+        ma_sound_set_volume(snd.get(), volume);
+        ma_sound_set_pitch(snd.get(), std::clamp(pitch, 0.25f, 4.0f));
+        ma_sound_set_pan(snd.get(), std::clamp(pan, -1.0f, 1.0f));
+        ma_sound_start(snd.get());
+        oneShots.push_back(std::move(snd));
+    }
 };
 
 Audio::Audio() : m_impl(std::make_unique<Impl>()) {
@@ -80,22 +102,31 @@ void Audio::setMasterVolume(float volume) {
     }
 }
 
-void Audio::play(const std::string& path, float volume) {
+void Audio::play(const std::string& path, float volume, float pitch) {
+    if (m_impl->ok) {
+        m_impl->start(path, volume, pitch, 0.0f);
+    }
+}
+
+void Audio::playAt(const std::string& path, const glm::vec3& position, float volume, float pitch) {
     if (!m_impl->ok) {
         return;
     }
-    // A self-owned voice with its OWN volume — overlapping plays mix, and one
-    // quiet SFX no longer drags the whole mix down (the old master-volume bug).
-    auto snd = std::make_unique<ma_sound>();
-    const ma_result r = ma_sound_init_from_file(&m_impl->engine, path.c_str(), MA_SOUND_FLAG_DECODE,
-                                                nullptr, nullptr, snd.get());
-    if (r != MA_SUCCESS) {
-        FORGE_WARN("audio: failed to load {} (result {})", path, static_cast<int>(r));
+    const glm::vec3 to = position - m_impl->listenerPos;
+    const float dist = glm::length(to);
+    // Inverse-square-ish rolloff with a 5 m knee; inaudible things don't
+    // cost a voice.
+    const float gain = volume / (1.0f + (dist / 5.0f) * (dist / 5.0f));
+    if (gain < 0.01f) {
         return;
     }
-    ma_sound_set_volume(snd.get(), volume);
-    ma_sound_start(snd.get());
-    m_impl->oneShots.push_back(std::move(snd));
+    const float pan = dist > 0.2f ? glm::dot(to / dist, m_impl->listenerRight) * 0.8f : 0.0f;
+    m_impl->start(path, gain, pitch, pan);
+}
+
+void Audio::setListener(const glm::vec3& position, const glm::vec3& right) {
+    m_impl->listenerPos = position;
+    m_impl->listenerRight = right;
 }
 
 SoundHandle Audio::playLoop(const std::string& path, float volume) {

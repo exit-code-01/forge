@@ -19,8 +19,11 @@
 #include "forge_gen/MeshShaders.hpp" // generated from checked-in .spv (ADR-011)
 
 #include <glm/gtc/matrix_transform.hpp>
+#include <glm/vec4.hpp>
 
+#include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstring>
 #include <stdexcept>
 #include <vector>
@@ -37,20 +40,85 @@ constexpr uint32_t kFramesInFlight = 2;
 // real scene demands cascades.
 constexpr uint32_t kShadowMapSize = 2048;
 
-// Hard cap on live textures — sizes the descriptor pool. Demo-era number;
-// pool growth (or bindless) is a P8+ conversation.
-constexpr uint32_t kMaxTextures = 64;
+// Scene color target: linear, scene-referred HDR. Half-float keeps emissive
+// values far above 1.0 intact for bloom and the tone mapper. (Color
+// attachment + blend + linear filtering on this format are spec-mandatory.)
+constexpr VkFormat kHdrFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
+
+// Bloom: a mip chain starting at half resolution. Six levels reach a blur
+// radius of roughly a tenth of the screen at 720p; fewer are used when the
+// window is too small to hold them.
+constexpr uint32_t kMaxBloomMips = 6;
+constexpr float kBloomThreshold = 1.0f; // scene-referred brightness where bloom starts
+constexpr float kBloomKnee = 0.5f;      // soft-knee half-width around the threshold
+// The chain is summed and averaged over its mips, which leaves thin emitters
+// (most of whose energy lives in the first mips) faint; this gain is tuned so
+// setBloom(0.6) gives a 3-pixel, radiance-6 laser beam a clear soft halo.
+constexpr float kBloomGain = 2.0f;
+
+
+// Hard cap on live textures — sizes the descriptor pool. Raised from 64 for
+// imported model packs (ADR-030); exhaustion falls back to white, logged.
+// Pool growth (or bindless) is the next step if packs outgrow it.
+constexpr uint32_t kMaxTextures = Renderer::kMaxTextures;
 
 // Per-frame GPU data (ADR-012). Layout mirrors the std140 block in
 // mesh.vert/frag: mat4s then vec4s — nothing that std140 would repack.
+// The vertex shaders declare only the leading members (through lightColor);
+// mesh.frag declares the whole block.
 struct FrameUbo {
     glm::mat4 viewProj;
     glm::mat4 lightViewProj; // world -> light clip (shadow render AND sample)
     glm::vec4 cameraPos;
     glm::vec4 lightDirection; // xyz: surface -> light, normalized
     glm::vec4 lightColor;     // rgb * intensity
+    glm::vec4 fogColor;       // rgb linear, a: density per meter (0 = off)
+    glm::vec4 ambientSky;     // hemisphere ambient, normal pointing up
+    glm::vec4 ambientGround;  // hemisphere ambient, normal pointing down
+    glm::vec4 counts;         // x: active point lights
+    glm::vec4 pointPosRadius[Renderer::kMaxPointLights]; // xyz world pos, w radius
+    glm::vec4 pointColor[Renderer::kMaxPointLights];     // rgb * HDR intensity
+    // Sky tail (ADR-030): read only by sky.frag, so mesh.frag's prefix
+    // declaration stays valid.
+    glm::mat4 invViewProj; // clip -> world, for sky view rays
+    glm::vec4 skyZenith;   // rgb
+    glm::vec4 skyHorizon;  // rgb, a: panorama yaw (radians)
+    glm::vec4 skyGround;   // rgb
+    glm::vec4 skySun;      // rgb: disc radiance, a: cos(angular radius), 2 = no disc
+    glm::vec4 skyParams;   // x: panorama on, y: its intensity, z: fog distance, w: halo
 };
-static_assert(sizeof(FrameUbo) == 176, "must match the std140 block in mesh shaders");
+static_assert(sizeof(FrameUbo) == 240 + 32 * Renderer::kMaxPointLights + 144,
+              "must match the std140 blocks in mesh.frag / sky.frag");
+
+// Per-draw push constants (ADR-012): 112 of the 128 bytes Vulkan guarantees.
+// The static vertex stages read only `model`; mesh.frag reads emissive +
+// tint; the skinned vertex stages (ADR-030) also read skin.x, the first
+// joint of the draw's palette slice.
+struct DrawPush {
+    glm::mat4 model;
+    glm::vec4 emissive; // rgb: linear HDR radiance added after lighting
+    glm::vec4 tint;     // rgb: albedo multiplier
+    glm::uvec4 skin;    // x: joint offset (skinned pipelines only)
+};
+static_assert(sizeof(DrawPush) == 112, "must match the push_constant blocks (mesh*.vert/frag)");
+constexpr VkShaderStageFlags kDrawPushStages =
+    VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
+
+// Push block shared by the post shaders (bloom_down/up, composite): one vec4
+// whose meaning is documented per shader.
+struct PostPush {
+    glm::vec4 params;
+};
+
+// Hemisphere ambient (mesh.frag): a small neutral floor plus a fraction of
+// the room's key-light color, so the per-room mood set by setLighting() also
+// tints the shadows. Ground = dimmer, slightly warm "bounce".
+// Levels are tuned for the ACES curve, whose toe crushes far harder than the
+// Reinhard it replaced: these keep key-light shadows about where they were.
+constexpr glm::vec3 kAmbientSkyBase{0.040f, 0.046f, 0.060f};
+constexpr float kAmbientSkyFromKey = 0.028f;
+constexpr glm::vec3 kAmbientGroundBase{0.020f, 0.018f, 0.016f};
+constexpr float kAmbientGroundFromKey = 0.012f;
 
 // The REAL pixel size right now (HiDPI-safe, unlike the cached WindowDesc
 // size). {0,0} while minimized — the caller must skip the frame.
@@ -102,14 +170,15 @@ bool formatHasStencil(VkFormat format) {
 
 // Device-local 2D image + memory (depth buffer, shadow map). Throws on failure.
 void allocateImage(const VulkanDevice& device, uint32_t width, uint32_t height, VkFormat format,
-                   VkImageUsageFlags usage, VkImage& outImage, VkDeviceMemory& outMemory) {
+                   VkImageUsageFlags usage, VkImage& outImage, VkDeviceMemory& outMemory,
+                   uint32_t mipLevels = 1) {
     const VkDevice dev = device.device();
     VkImageCreateInfo imageInfo{};
     imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
     imageInfo.imageType = VK_IMAGE_TYPE_2D;
     imageInfo.format = format;
     imageInfo.extent = {width, height, 1};
-    imageInfo.mipLevels = 1;
+    imageInfo.mipLevels = mipLevels;
     imageInfo.arrayLayers = 1;
     imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
     imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
@@ -201,13 +270,19 @@ struct Renderer::Impl {
     VkDescriptorPool descriptorPool = VK_NULL_HANDLE;
     std::array<VkDescriptorSet, kFramesInFlight> frameSets{};
     std::array<GpuBuffer, kFramesInFlight> frameUbos;
+    // Joint palettes (ADR-030): per frame in flight, persistently mapped,
+    // set 0 binding 2 — same fence-guarded ownership as the frame UBO.
+    std::array<GpuBuffer, kFramesInFlight> jointBuffers;
+    uint32_t jointCount = 0; // matrices uploaded for the frame being recorded
 
     // GPU resource tables; handles are indices. Entry 0 of textures is the
     // built-in checker placeholder (ADR-013).
     struct MeshEntry {
         GpuBuffer vertexBuffer;
         GpuBuffer indexBuffer;
+        GpuBuffer skinBuffer; // SkinVertex stream; empty for static meshes
         uint32_t indexCount = 0;
+        uint32_t jointSpan = 0; // highest joint index referenced + 1 (skinned only)
     };
     std::vector<MeshEntry> meshes;
     struct TextureEntry {
@@ -222,9 +297,40 @@ struct Renderer::Impl {
     VkImageView shadowView = VK_NULL_HANDLE;
     VkSampler shadowSampler = VK_NULL_HANDLE; // comparison sampler (PCF)
 
+    // HDR scene target (swapchain-sized, RGBA16F): the mesh pass renders
+    // here; the composite pass tone-maps it into the swapchain image. ONE
+    // image shared by all frames in flight, same reasoning as the depth buffer.
+    VkImage hdrImage = VK_NULL_HANDLE;
+    VkDeviceMemory hdrMemory = VK_NULL_HANDLE;
+    VkImageView hdrView = VK_NULL_HANDLE;
+
+    // Bloom chain: one RGBA16F image whose mip 0 is half the swapchain size.
+    // Each mip has its own view (render target AND sample source) and its
+    // own descriptor set (as a source).
+    VkImage bloomImage = VK_NULL_HANDLE;
+    VkDeviceMemory bloomMemory = VK_NULL_HANDLE;
+    std::vector<VkImageView> bloomViews;
+    std::vector<VkExtent2D> bloomExtents;
+    std::vector<VkDescriptorSet> bloomSets; // [i] samples bloom mip i
+
+    // Post chain plumbing. Sets here reference swapchain-sized targets shared
+    // by all frames in flight, so they are (re)written only under waitIdle.
+    VkSampler postSampler = VK_NULL_HANDLE;               // linear, clamp-to-edge
+    VkDescriptorSetLayout postSetLayout = VK_NULL_HANDLE; // 2 combined image samplers
+    VkDescriptorPool postPool = VK_NULL_HANDLE;
+    VkDescriptorSet sceneSet = VK_NULL_HANDLE;     // HDR scene (bloom prefilter source)
+    VkDescriptorSet compositeSet = VK_NULL_HANDLE; // HDR scene + bloom mip 0
+    VkPipelineLayout postLayout = VK_NULL_HANDLE;
+    VkPipeline bloomDownPipeline = VK_NULL_HANDLE;
+    VkPipeline bloomUpPipeline = VK_NULL_HANDLE;   // additive blend
+    VkPipeline compositePipeline = VK_NULL_HANDLE; // -> swapchain format
+
     VkPipelineLayout pipelineLayout = VK_NULL_HANDLE;
     VkPipeline pipeline = VK_NULL_HANDLE;
     VkPipeline shadowPipeline = VK_NULL_HANDLE; // depth-only, light's POV
+    VkPipeline skinnedPipeline = VK_NULL_HANDLE;       // ADR-030: + SkinVertex stream
+    VkPipeline skinnedShadowPipeline = VK_NULL_HANDLE; // ...and its shadow twin
+    VkPipeline skyPipeline = VK_NULL_HANDLE;           // ADR-030: fullscreen, behind all
     VkCommandPool commandPool = VK_NULL_HANDLE;
 
     // Per frame-in-flight: recording + acquire sync.
@@ -237,6 +343,7 @@ struct Renderer::Impl {
 
     uint32_t frameIndex = 0;
     bool needRecreate = false;
+    bool textureCapWarned = false;
     internal::UiRenderHook* uiHook = nullptr; // borrowed; EditorUi outlives its use
 
     // Per-room lighting (week 5): app-settable key light. Defaults match the
@@ -245,20 +352,38 @@ struct Renderer::Impl {
     glm::vec3 lightDir = glm::normalize(glm::vec3(0.5f, 0.8f, 0.35f));
     glm::vec3 lightColor{3.0f, 2.9f, 2.7f}; // rgb * HDR intensity
 
+    // Local lights / fog / post settings: app-settable, persist until changed.
+    std::array<PointLight, Renderer::kMaxPointLights> pointLights{};
+    uint32_t pointLightCount = 0;
+    glm::vec3 fogColor{0.0f};
+    float fogDensity = 0.0f; // per meter; 0 = off
+    float exposure = 1.0f;
+    float bloomIntensity = 0.6f;
+    Sky sky; // ADR-030; defaults = the indoor facility sky
+
     Impl(Window& win, VulkanContext& ctx) : window(win), context(ctx) {}
 
     void createDepthResources();
     void destroyDepthResources();
     void createShadowResources();
     void createDescriptors();
-    void createPipeline();
-    void createShadowPipeline();
+    void createPipelineLayout();
+    [[nodiscard]] VkPipeline makeScenePipeline(bool skinned) const;
+    [[nodiscard]] VkPipeline makeShadowPipeline(bool skinned) const;
+    [[nodiscard]] VkPipeline makeSkyPipeline() const;
+    void createPostResources();
+    void destroyPostResources();
+    void createPostTargets();
+    void destroyPostTargets();
+    [[nodiscard]] VkPipeline makePostPipeline(const uint32_t* fragWords, size_t fragBytes,
+                                              VkFormat colorFormat, bool additive) const;
     void createFrameObjects();
     void createImageSemaphores();
     void recreateSwapchain();
     void writeMaterialSet(TextureEntry& entry) const;
     void buildMeshEntry(std::span<const Vertex> vertices, std::span<const uint32_t> indices,
-                        MeshEntry& out) const;
+                        std::span<const SkinVertex> skin, MeshEntry& out) const;
+    void recordBloom(VkCommandBuffer cmd) const;
     void record(VkCommandBuffer cmd, uint32_t imageIndex, uint32_t frame,
                 std::span<const DrawItem> items) const;
 };
@@ -333,8 +458,9 @@ void Renderer::Impl::destroyDepthResources() {
 void Renderer::Impl::createDescriptors() {
     const VkDevice dev = device->device();
 
-    // SET 0 (per-frame): binding 0 UBO, binding 1 shadow map.
-    VkDescriptorSetLayoutBinding frameBindings[2]{};
+    // SET 0 (per-frame): binding 0 UBO, binding 1 shadow map, binding 2 the
+    // joint palette storage buffer (skinned vertex stages, ADR-030).
+    VkDescriptorSetLayoutBinding frameBindings[3]{};
     frameBindings[0].binding = 0;
     frameBindings[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
     frameBindings[0].descriptorCount = 1;
@@ -343,9 +469,13 @@ void Renderer::Impl::createDescriptors() {
     frameBindings[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     frameBindings[1].descriptorCount = 1;
     frameBindings[1].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    frameBindings[2].binding = 2;
+    frameBindings[2].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    frameBindings[2].descriptorCount = 1;
+    frameBindings[2].stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
     VkDescriptorSetLayoutCreateInfo frameLayoutInfo{};
     frameLayoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-    frameLayoutInfo.bindingCount = 2;
+    frameLayoutInfo.bindingCount = 3;
     frameLayoutInfo.pBindings = frameBindings;
     if (vkCreateDescriptorSetLayout(dev, &frameLayoutInfo, nullptr, &frameSetLayout) !=
         VK_SUCCESS) {
@@ -367,13 +497,14 @@ void Renderer::Impl::createDescriptors() {
         throw std::runtime_error("vkCreateDescriptorSetLayout (material) failed");
     }
 
-    VkDescriptorPoolSize poolSizes[2]{};
+    VkDescriptorPoolSize poolSizes[3]{};
     poolSizes[0] = {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, kFramesInFlight};
     poolSizes[1] = {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, kFramesInFlight + kMaxTextures};
+    poolSizes[2] = {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, kFramesInFlight};
     VkDescriptorPoolCreateInfo poolInfo{};
     poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
     poolInfo.maxSets = kFramesInFlight + kMaxTextures;
-    poolInfo.poolSizeCount = 2;
+    poolInfo.poolSizeCount = 3;
     poolInfo.pPoolSizes = poolSizes;
     if (vkCreateDescriptorPool(dev, &poolInfo, nullptr, &descriptorPool) != VK_SUCCESS) {
         throw std::runtime_error("vkCreateDescriptorPool failed");
@@ -399,7 +530,12 @@ void Renderer::Impl::createDescriptors() {
         VkDescriptorBufferInfo bufferInfo{frameUbos[i].handle(), 0, sizeof(FrameUbo)};
         VkDescriptorImageInfo shadowInfo{shadowSampler, shadowView,
                                          VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
-        VkWriteDescriptorSet writes[2]{};
+        constexpr VkDeviceSize kJointBytes = sizeof(glm::mat4) * Renderer::kMaxJoints;
+        jointBuffers[i] =
+            GpuBuffer(*device, kJointBytes, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                      VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+        VkDescriptorBufferInfo jointInfo{jointBuffers[i].handle(), 0, kJointBytes};
+        VkWriteDescriptorSet writes[3]{};
         writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         writes[0].dstSet = frameSets[i];
         writes[0].dstBinding = 0;
@@ -412,7 +548,13 @@ void Renderer::Impl::createDescriptors() {
         writes[1].descriptorCount = 1;
         writes[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         writes[1].pImageInfo = &shadowInfo;
-        vkUpdateDescriptorSets(dev, 2, writes, 0, nullptr);
+        writes[2].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[2].dstSet = frameSets[i];
+        writes[2].dstBinding = 2;
+        writes[2].descriptorCount = 1;
+        writes[2].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        writes[2].pBufferInfo = &jointInfo;
+        vkUpdateDescriptorSets(dev, 3, writes, 0, nullptr);
     }
 }
 
@@ -441,10 +583,69 @@ void Renderer::Impl::writeMaterialSet(TextureEntry& entry) const {
     vkUpdateDescriptorSets(dev, 1, &write, 0, nullptr);
 }
 
-void Renderer::Impl::createPipeline() {
+// Per-draw data rides in push constants (ADR-012): model matrix + emissive
+// + tint (+ joint offset), one range visible to both stages. Shared by the
+// scene, shadow and sky pipelines so descriptor sets bind identically.
+void Renderer::Impl::createPipelineLayout() {
+    VkPushConstantRange pushRange{};
+    pushRange.stageFlags = kDrawPushStages;
+    pushRange.offset = 0;
+    pushRange.size = sizeof(DrawPush);
+    const VkDescriptorSetLayout setLayouts[] = {frameSetLayout, materialSetLayout};
+    VkPipelineLayoutCreateInfo layoutInfo{};
+    layoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+    layoutInfo.setLayoutCount = 2;
+    layoutInfo.pSetLayouts = setLayouts;
+    layoutInfo.pushConstantRangeCount = 1;
+    layoutInfo.pPushConstantRanges = &pushRange;
+    if (vkCreatePipelineLayout(device->device(), &layoutInfo, nullptr, &pipelineLayout) !=
+        VK_SUCCESS) {
+        throw std::runtime_error("vkCreatePipelineLayout failed");
+    }
+}
+
+namespace {
+
+// Vertex input for the mesh pipelines: binding 0 = forge::Vertex; skinned
+// adds binding 1 = forge::SkinVertex (joints u16x4 at location 3, weights
+// at location 4). `positionOnly` = the shadow variant (location 0 only).
+struct VertexInputDesc {
+    std::array<VkVertexInputBindingDescription, 2> bindings{};
+    std::array<VkVertexInputAttributeDescription, 5> attributes{};
+    VkPipelineVertexInputStateCreateInfo info{};
+
+    VertexInputDesc(bool skinned, bool positionOnly) {
+        bindings[0] = {0, sizeof(Vertex), VK_VERTEX_INPUT_RATE_VERTEX};
+        bindings[1] = {1, sizeof(SkinVertex), VK_VERTEX_INPUT_RATE_VERTEX};
+        uint32_t count = 0;
+        attributes[count++] = {0, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(Vertex, position)};
+        if (!positionOnly) {
+            attributes[count++] = {1, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(Vertex, normal)};
+            attributes[count++] = {2, 0, VK_FORMAT_R32G32_SFLOAT, offsetof(Vertex, uv)};
+        }
+        if (skinned) {
+            attributes[count++] = {3, 1, VK_FORMAT_R16G16B16A16_UINT,
+                                   offsetof(SkinVertex, joints)};
+            attributes[count++] = {4, 1, VK_FORMAT_R32G32B32A32_SFLOAT,
+                                   offsetof(SkinVertex, weights)};
+        }
+        info.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+        info.vertexBindingDescriptionCount = skinned ? 2u : 1u;
+        info.pVertexBindingDescriptions = bindings.data();
+        info.vertexAttributeDescriptionCount = count;
+        info.pVertexAttributeDescriptions = attributes.data();
+    }
+    VertexInputDesc(const VertexInputDesc&) = delete; // info points into *this
+    VertexInputDesc& operator=(const VertexInputDesc&) = delete;
+};
+
+} // namespace
+
+VkPipeline Renderer::Impl::makeScenePipeline(bool skinned) const {
     const VkDevice dev = device->device();
     const VkShaderModule vert =
-        makeShaderModule(dev, shaders::kMeshVert, sizeof(shaders::kMeshVert));
+        skinned ? makeShaderModule(dev, shaders::kMeshSkinnedVert, sizeof(shaders::kMeshSkinnedVert))
+                : makeShaderModule(dev, shaders::kMeshVert, sizeof(shaders::kMeshVert));
     const VkShaderModule frag =
         makeShaderModule(dev, shaders::kMeshFrag, sizeof(shaders::kMeshFrag));
 
@@ -458,21 +659,9 @@ void Renderer::Impl::createPipeline() {
     stages[1].module = frag;
     stages[1].pName = "main";
 
-    // Vertex layout: interleaved position + normal (forge::Vertex).
-    VkVertexInputBindingDescription bindingDesc{};
-    bindingDesc.binding = 0;
-    bindingDesc.stride = sizeof(Vertex);
-    bindingDesc.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
-    VkVertexInputAttributeDescription attributes[3]{};
-    attributes[0] = {0, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(Vertex, position)};
-    attributes[1] = {1, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(Vertex, normal)};
-    attributes[2] = {2, 0, VK_FORMAT_R32G32_SFLOAT, offsetof(Vertex, uv)};
-    VkPipelineVertexInputStateCreateInfo vertexInput{};
-    vertexInput.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
-    vertexInput.vertexBindingDescriptionCount = 1;
-    vertexInput.pVertexBindingDescriptions = &bindingDesc;
-    vertexInput.vertexAttributeDescriptionCount = 3;
-    vertexInput.pVertexAttributeDescriptions = attributes;
+    // Vertex layout: interleaved position + normal + uv (forge::Vertex),
+    // plus the SkinVertex stream for the skinned variant.
+    const VertexInputDesc vertexInput(skinned, false);
 
     VkPipelineInputAssemblyStateCreateInfo inputAssembly{};
     inputAssembly.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
@@ -520,26 +709,10 @@ void Renderer::Impl::createPipeline() {
     blend.attachmentCount = 1;
     blend.pAttachments = &blendAttachment;
 
-    // Per-draw data rides in push constants: model matrix = 64 of the 128
-    // bytes Vulkan guarantees (ADR-012).
-    VkPushConstantRange pushRange{};
-    pushRange.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
-    pushRange.offset = 0;
-    pushRange.size = sizeof(glm::mat4);
-    const VkDescriptorSetLayout setLayouts[] = {frameSetLayout, materialSetLayout};
-    VkPipelineLayoutCreateInfo layoutInfo{};
-    layoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-    layoutInfo.setLayoutCount = 2;
-    layoutInfo.pSetLayouts = setLayouts;
-    layoutInfo.pushConstantRangeCount = 1;
-    layoutInfo.pPushConstantRanges = &pushRange;
-    if (vkCreatePipelineLayout(dev, &layoutInfo, nullptr, &pipelineLayout) != VK_SUCCESS) {
-        throw std::runtime_error("vkCreatePipelineLayout failed");
-    }
-
     // Dynamic rendering (ADR-010): the pipeline declares attachment formats
     // directly — no VkRenderPass object anywhere in the engine.
-    const VkFormat colorFormat = swapchain->format();
+    // The mesh pass targets the HDR scene buffer, never the swapchain.
+    const VkFormat colorFormat = kHdrFormat;
     VkPipelineRenderingCreateInfo rendering{};
     rendering.sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO;
     rendering.colorAttachmentCount = 1;
@@ -551,7 +724,7 @@ void Renderer::Impl::createPipeline() {
     pipelineInfo.pNext = &rendering;
     pipelineInfo.stageCount = 2;
     pipelineInfo.pStages = stages;
-    pipelineInfo.pVertexInputState = &vertexInput;
+    pipelineInfo.pVertexInputState = &vertexInput.info;
     pipelineInfo.pInputAssemblyState = &inputAssembly;
     pipelineInfo.pViewportState = &viewportState;
     pipelineInfo.pRasterizationState = &raster;
@@ -561,19 +734,23 @@ void Renderer::Impl::createPipeline() {
     pipelineInfo.pDynamicState = &dynamic;
     pipelineInfo.layout = pipelineLayout;
 
-    const VkResult result =
-        vkCreateGraphicsPipelines(dev, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &pipeline);
+    VkPipeline result = VK_NULL_HANDLE;
+    const VkResult created =
+        vkCreateGraphicsPipelines(dev, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &result);
     vkDestroyShaderModule(dev, vert, nullptr); // safe: pipeline keeps its own copy
     vkDestroyShaderModule(dev, frag, nullptr);
-    if (result != VK_SUCCESS) {
+    if (created != VK_SUCCESS) {
         throw std::runtime_error("vkCreateGraphicsPipelines failed");
     }
+    return result;
 }
 
-void Renderer::Impl::createShadowPipeline() {
+VkPipeline Renderer::Impl::makeShadowPipeline(bool skinned) const {
     const VkDevice dev = device->device();
     const VkShaderModule vert =
-        makeShaderModule(dev, shaders::kShadowVert, sizeof(shaders::kShadowVert));
+        skinned ? makeShaderModule(dev, shaders::kShadowSkinnedVert,
+                                   sizeof(shaders::kShadowSkinnedVert))
+                : makeShaderModule(dev, shaders::kShadowVert, sizeof(shaders::kShadowVert));
 
     // ONE stage: no fragment shader — the depth write is the whole job.
     VkPipelineShaderStageCreateInfo stage{};
@@ -582,19 +759,8 @@ void Renderer::Impl::createShadowPipeline() {
     stage.module = vert;
     stage.pName = "main";
 
-    // Same vertex buffer, but the shader consumes only position.
-    VkVertexInputBindingDescription bindingDesc{};
-    bindingDesc.binding = 0;
-    bindingDesc.stride = sizeof(Vertex);
-    bindingDesc.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
-    VkVertexInputAttributeDescription attribute{0, 0, VK_FORMAT_R32G32B32_SFLOAT,
-                                                offsetof(Vertex, position)};
-    VkPipelineVertexInputStateCreateInfo vertexInput{};
-    vertexInput.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
-    vertexInput.vertexBindingDescriptionCount = 1;
-    vertexInput.pVertexBindingDescriptions = &bindingDesc;
-    vertexInput.vertexAttributeDescriptionCount = 1;
-    vertexInput.pVertexAttributeDescriptions = &attribute;
+    // Same vertex buffers, but the shader consumes only position (+ skin).
+    const VertexInputDesc vertexInput(skinned, true);
 
     VkPipelineInputAssemblyStateCreateInfo inputAssembly{};
     inputAssembly.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
@@ -646,7 +812,7 @@ void Renderer::Impl::createShadowPipeline() {
     pipelineInfo.pNext = &rendering;
     pipelineInfo.stageCount = 1;
     pipelineInfo.pStages = &stage;
-    pipelineInfo.pVertexInputState = &vertexInput;
+    pipelineInfo.pVertexInputState = &vertexInput.info;
     pipelineInfo.pInputAssemblyState = &inputAssembly;
     pipelineInfo.pViewportState = &viewportState;
     pipelineInfo.pRasterizationState = &raster;
@@ -655,12 +821,386 @@ void Renderer::Impl::createShadowPipeline() {
     pipelineInfo.pDynamicState = &dynamic;
     pipelineInfo.layout = pipelineLayout;
 
-    const VkResult result =
-        vkCreateGraphicsPipelines(dev, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &shadowPipeline);
+    VkPipeline result = VK_NULL_HANDLE;
+    const VkResult created =
+        vkCreateGraphicsPipelines(dev, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &result);
     vkDestroyShaderModule(dev, vert, nullptr);
-    if (result != VK_SUCCESS) {
+    if (created != VK_SUCCESS) {
         throw std::runtime_error("vkCreateGraphicsPipelines (shadow) failed");
     }
+    return result;
+}
+
+// Sky (ADR-030): the fullscreen triangle into the HDR scene pass, before any
+// mesh. No depth test or write — meshes simply draw over it — but the
+// pipeline still declares the pass's depth format (dynamic rendering must
+// match the attachments that are bound). Same layout as the mesh pipelines:
+// set 0 = frame UBO (sky tail), set 1 = the panorama's material set.
+VkPipeline Renderer::Impl::makeSkyPipeline() const {
+    const VkDevice dev = device->device();
+    const VkShaderModule vert =
+        makeShaderModule(dev, shaders::kFullscreenVert, sizeof(shaders::kFullscreenVert));
+    const VkShaderModule frag = makeShaderModule(dev, shaders::kSkyFrag, sizeof(shaders::kSkyFrag));
+
+    VkPipelineShaderStageCreateInfo stages[2]{};
+    stages[0].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    stages[0].stage = VK_SHADER_STAGE_VERTEX_BIT;
+    stages[0].module = vert;
+    stages[0].pName = "main";
+    stages[1].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    stages[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT;
+    stages[1].module = frag;
+    stages[1].pName = "main";
+
+    VkPipelineVertexInputStateCreateInfo vertexInput{}; // gl_VertexIndex only
+    vertexInput.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+    VkPipelineInputAssemblyStateCreateInfo inputAssembly{};
+    inputAssembly.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
+    inputAssembly.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+    VkPipelineViewportStateCreateInfo viewportState{};
+    viewportState.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
+    viewportState.viewportCount = 1;
+    viewportState.scissorCount = 1;
+    constexpr VkDynamicState dynamicStates[] = {VK_DYNAMIC_STATE_VIEWPORT,
+                                                VK_DYNAMIC_STATE_SCISSOR};
+    VkPipelineDynamicStateCreateInfo dynamic{};
+    dynamic.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
+    dynamic.dynamicStateCount = 2;
+    dynamic.pDynamicStates = dynamicStates;
+    VkPipelineRasterizationStateCreateInfo raster{};
+    raster.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
+    raster.polygonMode = VK_POLYGON_MODE_FILL;
+    raster.cullMode = VK_CULL_MODE_NONE;
+    raster.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+    raster.lineWidth = 1.0f;
+    VkPipelineMultisampleStateCreateInfo multisample{};
+    multisample.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
+    multisample.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+    VkPipelineDepthStencilStateCreateInfo depthStencil{};
+    depthStencil.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
+    depthStencil.depthTestEnable = VK_FALSE;
+    depthStencil.depthWriteEnable = VK_FALSE;
+    VkPipelineColorBlendAttachmentState blendAttachment{};
+    blendAttachment.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
+                                     VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+    VkPipelineColorBlendStateCreateInfo blend{};
+    blend.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
+    blend.attachmentCount = 1;
+    blend.pAttachments = &blendAttachment;
+
+    const VkFormat colorFormat = kHdrFormat;
+    VkPipelineRenderingCreateInfo rendering{};
+    rendering.sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO;
+    rendering.colorAttachmentCount = 1;
+    rendering.pColorAttachmentFormats = &colorFormat;
+    rendering.depthAttachmentFormat = depthFormat;
+
+    VkGraphicsPipelineCreateInfo pipelineInfo{};
+    pipelineInfo.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+    pipelineInfo.pNext = &rendering;
+    pipelineInfo.stageCount = 2;
+    pipelineInfo.pStages = stages;
+    pipelineInfo.pVertexInputState = &vertexInput;
+    pipelineInfo.pInputAssemblyState = &inputAssembly;
+    pipelineInfo.pViewportState = &viewportState;
+    pipelineInfo.pRasterizationState = &raster;
+    pipelineInfo.pMultisampleState = &multisample;
+    pipelineInfo.pDepthStencilState = &depthStencil;
+    pipelineInfo.pColorBlendState = &blend;
+    pipelineInfo.pDynamicState = &dynamic;
+    pipelineInfo.layout = pipelineLayout;
+
+    VkPipeline result = VK_NULL_HANDLE;
+    const VkResult created =
+        vkCreateGraphicsPipelines(dev, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &result);
+    vkDestroyShaderModule(dev, vert, nullptr);
+    vkDestroyShaderModule(dev, frag, nullptr);
+    if (created != VK_SUCCESS) {
+        throw std::runtime_error("vkCreateGraphicsPipelines (sky) failed");
+    }
+    return result;
+}
+
+// Post pipelines (bloom down/up, composite): a fullscreen triangle, no vertex
+// input, no depth, one color attachment. `additive` = ONE/ONE blending (the
+// bloom upsample accumulates onto the mip it renders into).
+VkPipeline Renderer::Impl::makePostPipeline(const uint32_t* fragWords, size_t fragBytes,
+                                            VkFormat colorFormat, bool additive) const {
+    const VkDevice dev = device->device();
+    const VkShaderModule vert =
+        makeShaderModule(dev, shaders::kFullscreenVert, sizeof(shaders::kFullscreenVert));
+    const VkShaderModule frag = makeShaderModule(dev, fragWords, fragBytes);
+
+    VkPipelineShaderStageCreateInfo stages[2]{};
+    stages[0].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    stages[0].stage = VK_SHADER_STAGE_VERTEX_BIT;
+    stages[0].module = vert;
+    stages[0].pName = "main";
+    stages[1].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    stages[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT;
+    stages[1].module = frag;
+    stages[1].pName = "main";
+
+    VkPipelineVertexInputStateCreateInfo vertexInput{}; // none: gl_VertexIndex only
+    vertexInput.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+
+    VkPipelineInputAssemblyStateCreateInfo inputAssembly{};
+    inputAssembly.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
+    inputAssembly.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+
+    VkPipelineViewportStateCreateInfo viewportState{};
+    viewportState.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
+    viewportState.viewportCount = 1;
+    viewportState.scissorCount = 1;
+    constexpr VkDynamicState dynamicStates[] = {VK_DYNAMIC_STATE_VIEWPORT,
+                                                VK_DYNAMIC_STATE_SCISSOR};
+    VkPipelineDynamicStateCreateInfo dynamic{};
+    dynamic.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
+    dynamic.dynamicStateCount = 2;
+    dynamic.pDynamicStates = dynamicStates;
+
+    VkPipelineRasterizationStateCreateInfo raster{};
+    raster.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
+    raster.polygonMode = VK_POLYGON_MODE_FILL;
+    raster.cullMode = VK_CULL_MODE_NONE;
+    raster.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+    raster.lineWidth = 1.0f;
+
+    VkPipelineMultisampleStateCreateInfo multisample{};
+    multisample.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
+    multisample.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+
+    VkPipelineColorBlendAttachmentState blendAttachment{};
+    blendAttachment.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
+                                     VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+    if (additive) {
+        blendAttachment.blendEnable = VK_TRUE;
+        blendAttachment.srcColorBlendFactor = VK_BLEND_FACTOR_ONE;
+        blendAttachment.dstColorBlendFactor = VK_BLEND_FACTOR_ONE;
+        blendAttachment.colorBlendOp = VK_BLEND_OP_ADD;
+        blendAttachment.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+        blendAttachment.dstAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
+        blendAttachment.alphaBlendOp = VK_BLEND_OP_ADD;
+    }
+    VkPipelineColorBlendStateCreateInfo blend{};
+    blend.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
+    blend.attachmentCount = 1;
+    blend.pAttachments = &blendAttachment;
+
+    VkPipelineRenderingCreateInfo rendering{};
+    rendering.sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO;
+    rendering.colorAttachmentCount = 1;
+    rendering.pColorAttachmentFormats = &colorFormat;
+
+    VkGraphicsPipelineCreateInfo pipelineInfo{};
+    pipelineInfo.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+    pipelineInfo.pNext = &rendering;
+    pipelineInfo.stageCount = 2;
+    pipelineInfo.pStages = stages;
+    pipelineInfo.pVertexInputState = &vertexInput;
+    pipelineInfo.pInputAssemblyState = &inputAssembly;
+    pipelineInfo.pViewportState = &viewportState;
+    pipelineInfo.pRasterizationState = &raster;
+    pipelineInfo.pMultisampleState = &multisample;
+    pipelineInfo.pColorBlendState = &blend;
+    pipelineInfo.pDynamicState = &dynamic;
+    pipelineInfo.layout = postLayout;
+
+    VkPipeline result = VK_NULL_HANDLE;
+    const VkResult created =
+        vkCreateGraphicsPipelines(dev, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &result);
+    vkDestroyShaderModule(dev, vert, nullptr);
+    vkDestroyShaderModule(dev, frag, nullptr);
+    if (created != VK_SUCCESS) {
+        throw std::runtime_error("vkCreateGraphicsPipelines (post) failed");
+    }
+    return result;
+}
+
+// Everything in the post chain that does NOT depend on the swapchain size:
+// sampler, set layout, pool, pipeline layout, pipelines.
+void Renderer::Impl::createPostResources() {
+    const VkDevice dev = device->device();
+
+    // Linear + clamp-to-edge: the bloom filters rely on bilinear taps, and
+    // clamping stops the screen border from wrapping light across edges.
+    VkSamplerCreateInfo samplerInfo{};
+    samplerInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+    samplerInfo.magFilter = VK_FILTER_LINEAR;
+    samplerInfo.minFilter = VK_FILTER_LINEAR;
+    samplerInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST; // views are single-mip
+    samplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    samplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    samplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    if (vkCreateSampler(dev, &samplerInfo, nullptr, &postSampler) != VK_SUCCESS) {
+        throw std::runtime_error("vkCreateSampler (post) failed");
+    }
+
+    // One layout for every post pass: binding 0 = primary source, binding 1 =
+    // secondary (only composite.frag reads it: the bloom result).
+    VkDescriptorSetLayoutBinding bindings[2]{};
+    for (uint32_t i = 0; i < 2; ++i) {
+        bindings[i].binding = i;
+        bindings[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        bindings[i].descriptorCount = 1;
+        bindings[i].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    }
+    VkDescriptorSetLayoutCreateInfo layoutInfo{};
+    layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+    layoutInfo.bindingCount = 2;
+    layoutInfo.pBindings = bindings;
+    if (vkCreateDescriptorSetLayout(dev, &layoutInfo, nullptr, &postSetLayout) != VK_SUCCESS) {
+        throw std::runtime_error("vkCreateDescriptorSetLayout (post) failed");
+    }
+
+    // Own pool: reset wholesale whenever the targets are rebuilt (resize).
+    constexpr uint32_t kPostSets = kMaxBloomMips + 2; // bloom mips + scene + composite
+    const VkDescriptorPoolSize poolSize{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, kPostSets * 2};
+    VkDescriptorPoolCreateInfo poolInfo{};
+    poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+    poolInfo.maxSets = kPostSets;
+    poolInfo.poolSizeCount = 1;
+    poolInfo.pPoolSizes = &poolSize;
+    if (vkCreateDescriptorPool(dev, &poolInfo, nullptr, &postPool) != VK_SUCCESS) {
+        throw std::runtime_error("vkCreateDescriptorPool (post) failed");
+    }
+
+    VkPushConstantRange pushRange{};
+    pushRange.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    pushRange.offset = 0;
+    pushRange.size = sizeof(PostPush);
+    VkPipelineLayoutCreateInfo pipelineLayoutInfo{};
+    pipelineLayoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+    pipelineLayoutInfo.setLayoutCount = 1;
+    pipelineLayoutInfo.pSetLayouts = &postSetLayout;
+    pipelineLayoutInfo.pushConstantRangeCount = 1;
+    pipelineLayoutInfo.pPushConstantRanges = &pushRange;
+    if (vkCreatePipelineLayout(dev, &pipelineLayoutInfo, nullptr, &postLayout) != VK_SUCCESS) {
+        throw std::runtime_error("vkCreatePipelineLayout (post) failed");
+    }
+
+    bloomDownPipeline = makePostPipeline(shaders::kBloomDownFrag, sizeof(shaders::kBloomDownFrag),
+                                         kHdrFormat, false);
+    bloomUpPipeline = makePostPipeline(shaders::kBloomUpFrag, sizeof(shaders::kBloomUpFrag),
+                                       kHdrFormat, true);
+    // The swapchain format does not change across recreation in practice
+    // (same assumption the UI pipeline makes); if it ever does, rebuild this.
+    compositePipeline = makePostPipeline(shaders::kCompositeFrag, sizeof(shaders::kCompositeFrag),
+                                         swapchain->format(), false);
+}
+
+void Renderer::Impl::destroyPostResources() {
+    const VkDevice dev = device->device();
+    vkDestroyPipeline(dev, bloomDownPipeline, nullptr);
+    vkDestroyPipeline(dev, bloomUpPipeline, nullptr);
+    vkDestroyPipeline(dev, compositePipeline, nullptr);
+    vkDestroyPipelineLayout(dev, postLayout, nullptr);
+    vkDestroyDescriptorPool(dev, postPool, nullptr);
+    vkDestroyDescriptorSetLayout(dev, postSetLayout, nullptr);
+    vkDestroySampler(dev, postSampler, nullptr);
+}
+
+// The swapchain-sized half of the post chain: HDR scene target, bloom mip
+// chain, and the descriptor sets that point at them. Called at startup and
+// after every swapchain recreation (always under waitIdle).
+void Renderer::Impl::createPostTargets() {
+    const VkDevice dev = device->device();
+    const VkExtent2D extent = swapchain->extent();
+
+    allocateImage(*device, extent.width, extent.height, kHdrFormat,
+                  VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, hdrImage,
+                  hdrMemory);
+    VkImageViewCreateInfo viewInfo{};
+    viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+    viewInfo.image = hdrImage;
+    viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+    viewInfo.format = kHdrFormat;
+    viewInfo.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+    if (vkCreateImageView(dev, &viewInfo, nullptr, &hdrView) != VK_SUCCESS) {
+        throw std::runtime_error("vkCreateImageView (hdr) failed");
+    }
+
+    // Bloom chain: mip 0 is half resolution; keep halving while the short
+    // side stays at least a few texels (tiny windows get a shorter chain).
+    const uint32_t baseWidth = std::max(extent.width / 2, 1u);
+    const uint32_t baseHeight = std::max(extent.height / 2, 1u);
+    uint32_t mipCount = 1;
+    while (mipCount < kMaxBloomMips && (std::min(baseWidth, baseHeight) >> mipCount) >= 4) {
+        ++mipCount;
+    }
+    allocateImage(*device, baseWidth, baseHeight, kHdrFormat,
+                  VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, bloomImage,
+                  bloomMemory, mipCount);
+    bloomViews.assign(mipCount, VK_NULL_HANDLE);
+    bloomExtents.resize(mipCount);
+    for (uint32_t i = 0; i < mipCount; ++i) {
+        bloomExtents[i] = {std::max(baseWidth >> i, 1u), std::max(baseHeight >> i, 1u)};
+        viewInfo.image = bloomImage;
+        viewInfo.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, i, 1, 0, 1};
+        if (vkCreateImageView(dev, &viewInfo, nullptr, &bloomViews[i]) != VK_SUCCESS) {
+            throw std::runtime_error("vkCreateImageView (bloom) failed");
+        }
+    }
+
+    // Sets: [0] scene, [1] composite, [2..] one per bloom mip.
+    vkResetDescriptorPool(dev, postPool, 0);
+    std::vector<VkDescriptorSetLayout> layouts(mipCount + 2, postSetLayout);
+    std::vector<VkDescriptorSet> sets(layouts.size(), VK_NULL_HANDLE);
+    VkDescriptorSetAllocateInfo allocInfo{};
+    allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+    allocInfo.descriptorPool = postPool;
+    allocInfo.descriptorSetCount = static_cast<uint32_t>(layouts.size());
+    allocInfo.pSetLayouts = layouts.data();
+    if (vkAllocateDescriptorSets(dev, &allocInfo, sets.data()) != VK_SUCCESS) {
+        throw std::runtime_error("vkAllocateDescriptorSets (post) failed");
+    }
+    sceneSet = sets[0];
+    compositeSet = sets[1];
+    bloomSets.assign(sets.begin() + 2, sets.end());
+
+    const auto writeSet = [&](VkDescriptorSet set, VkImageView primary, VkImageView secondary) {
+        const VkDescriptorImageInfo images[2] = {
+            {postSampler, primary, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
+            {postSampler, secondary, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
+        };
+        VkWriteDescriptorSet write{};
+        write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        write.dstSet = set;
+        write.dstBinding = 0;
+        write.descriptorCount = 2; // bindings 0 and 1 are consecutive
+        write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        write.pImageInfo = images;
+        vkUpdateDescriptorSets(dev, 1, &write, 0, nullptr);
+    };
+    // Binding 1 is only read by composite.frag; the other sets just need it
+    // to hold something valid, so it mirrors binding 0.
+    writeSet(sceneSet, hdrView, hdrView);
+    writeSet(compositeSet, hdrView, bloomViews[0]);
+    for (uint32_t i = 0; i < mipCount; ++i) {
+        writeSet(bloomSets[i], bloomViews[i], bloomViews[i]);
+    }
+}
+
+void Renderer::Impl::destroyPostTargets() {
+    const VkDevice dev = device->device();
+    for (const VkImageView view : bloomViews) {
+        vkDestroyImageView(dev, view, nullptr);
+    }
+    bloomViews.clear();
+    bloomExtents.clear();
+    bloomSets.clear(); // the sets themselves die with the pool reset
+    vkDestroyImage(dev, bloomImage, nullptr);
+    vkFreeMemory(dev, bloomMemory, nullptr);
+    vkDestroyImageView(dev, hdrView, nullptr);
+    vkDestroyImage(dev, hdrImage, nullptr);
+    vkFreeMemory(dev, hdrMemory, nullptr);
+    bloomImage = VK_NULL_HANDLE;
+    bloomMemory = VK_NULL_HANDLE;
+    hdrView = VK_NULL_HANDLE;
+    hdrImage = VK_NULL_HANDLE;
+    hdrMemory = VK_NULL_HANDLE;
+    sceneSet = VK_NULL_HANDLE;
+    compositeSet = VK_NULL_HANDLE;
 }
 
 void Renderer::Impl::createFrameObjects() {
@@ -707,16 +1247,122 @@ void Renderer::Impl::recreateSwapchain() {
         vkDestroySemaphore(device->device(), s, nullptr);
     }
     renderFinished.clear();
+    destroyPostTargets();
     destroyDepthResources();
     swapchain.reset(); // old swapchain must die before the surface is reused
 
     const VkExtent2D extent = framebufferExtent(window);
     swapchain = std::make_unique<VulkanSwapchain>(*device, surface, extent.width, extent.height);
     createDepthResources(); // depth must always match the swapchain extent
+    createPostTargets();    // ...and so must the HDR scene target + bloom chain
     createImageSemaphores();
     needRecreate = false;
     // Pipeline survives: viewport/scissor are dynamic and the attachment
     // formats do not change in practice (if they ever do, recreate it here).
+}
+
+// Bloom (dual filter): bright-pass + 13-tap downsample of the HDR scene into
+// mip 0, plain 13-tap downsamples down the chain, then 9-tap tent upsamples
+// back up, each ADDED onto the mip it lands on. Expects hdrImage in
+// SHADER_READ_ONLY; leaves bloom mip 0 in SHADER_READ_ONLY for the composite.
+void Renderer::Impl::recordBloom(VkCommandBuffer cmd) const {
+    const auto mipCount = static_cast<uint32_t>(bloomViews.size());
+    // Source scope = the previous frame's last uses of this shared image.
+    constexpr VkPipelineStageFlags2 kPrevStages =
+        VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
+    constexpr VkAccessFlags2 kPrevAccess =
+        VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
+
+    if (bloomIntensity <= 0.0f) {
+        // Disabled: composite.frag skips the bloom taps entirely, but the
+        // image bound to its sampler must still be in the layout the
+        // descriptor promises. Contents stay undefined and unread.
+        vkutil::transitionImage(cmd, bloomImage, VK_IMAGE_ASPECT_COLOR_BIT, 0, 1,
+                                VK_IMAGE_LAYOUT_UNDEFINED,
+                                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, kPrevStages, kPrevAccess,
+                                VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
+                                VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+        return;
+    }
+
+    // Every mip is fully overwritten by its downsample: discard old contents.
+    vkutil::transitionImage(cmd, bloomImage, VK_IMAGE_ASPECT_COLOR_BIT, 0, mipCount,
+                            VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                            kPrevStages, kPrevAccess,
+                            VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+                            VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT);
+
+    const auto toSampled = [&](uint32_t mip) {
+        vkutil::transitionImage(cmd, bloomImage, VK_IMAGE_ASPECT_COLOR_BIT, mip, 1,
+                                VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                                VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+                                VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
+                                VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
+                                VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+    };
+    // One fullscreen draw into bloom mip `dstMip`, sampling `sourceSet`.
+    const auto drawInto = [&](uint32_t dstMip, VkAttachmentLoadOp loadOp, VkDescriptorSet sourceSet,
+                              const PostPush& push) {
+        VkRenderingAttachmentInfo attachment{};
+        attachment.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+        attachment.imageView = bloomViews[dstMip];
+        attachment.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        attachment.loadOp = loadOp;
+        attachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+        VkRenderingInfo info{};
+        info.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
+        info.renderArea = {{0, 0}, bloomExtents[dstMip]};
+        info.layerCount = 1;
+        info.colorAttachmentCount = 1;
+        info.pColorAttachments = &attachment;
+        vkCmdBeginRendering(cmd, &info);
+        const VkViewport viewport{0.0f,
+                                  0.0f,
+                                  static_cast<float>(bloomExtents[dstMip].width),
+                                  static_cast<float>(bloomExtents[dstMip].height),
+                                  0.0f,
+                                  1.0f};
+        const VkRect2D scissor{{0, 0}, bloomExtents[dstMip]};
+        vkCmdSetViewport(cmd, 0, 1, &viewport);
+        vkCmdSetScissor(cmd, 0, 1, &scissor);
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, postLayout, 0, 1, &sourceSet,
+                                0, nullptr);
+        vkCmdPushConstants(cmd, postLayout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(PostPush),
+                           &push);
+        vkCmdDraw(cmd, 3, 1, 0, 0);
+        vkCmdEndRendering(cmd);
+    };
+    const auto texelSize = [](VkExtent2D extent) {
+        return glm::vec2(1.0f / static_cast<float>(extent.width),
+                         1.0f / static_cast<float>(extent.height));
+    };
+
+    // Down: scene -> mip 0 (thresholded), then mip i-1 -> mip i.
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, bloomDownPipeline);
+    for (uint32_t i = 0; i < mipCount; ++i) {
+        const bool prefilter = i == 0;
+        const glm::vec2 srcTexel = texelSize(prefilter ? swapchain->extent() : bloomExtents[i - 1]);
+        const PostPush push{glm::vec4(srcTexel, prefilter ? kBloomThreshold : 0.0f, kBloomKnee)};
+        drawInto(i, VK_ATTACHMENT_LOAD_OP_DONT_CARE, prefilter ? sceneSet : bloomSets[i - 1], push);
+        toSampled(i);
+    }
+
+    // Up: mip i += tent(mip i+1), smallest first.
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, bloomUpPipeline);
+    for (uint32_t i = mipCount - 1; i-- > 0;) {
+        vkutil::transitionImage(cmd, bloomImage, VK_IMAGE_ASPECT_COLOR_BIT, i, 1,
+                                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                                VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                                VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
+                                VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
+                                VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+                                VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT |
+                                    VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT);
+        const PostPush push{glm::vec4(texelSize(bloomExtents[i + 1]), 0.0f, 0.0f)};
+        drawInto(i, VK_ATTACHMENT_LOAD_OP_LOAD, bloomSets[i + 1], push);
+        toSampled(i);
+    }
 }
 
 void Renderer::Impl::record(VkCommandBuffer cmd, uint32_t imageIndex, uint32_t frame,
@@ -725,14 +1371,34 @@ void Renderer::Impl::record(VkCommandBuffer cmd, uint32_t imageIndex, uint32_t f
     beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
     vkBeginCommandBuffer(cmd, &beginInfo);
 
-    const VkDeviceSize vbOffset = 0;
-    const auto drawItemMesh = [&](const DrawItem& item) {
+    // Skinned draw = a skinned mesh whose palette slice fits in this frame's
+    // upload; anything else (incl. kNoJoints) takes the static path, which
+    // draws a skinned mesh in its bind pose.
+    const auto isSkinned = [&](const DrawItem& item) {
         const MeshEntry& mesh = meshes[item.mesh.value];
-        const VkBuffer vb = mesh.vertexBuffer.handle();
-        vkCmdBindVertexBuffers(cmd, 0, 1, &vb, &vbOffset);
+        return mesh.jointSpan > 0 && item.jointOffset != DrawItem::kNoJoints &&
+               item.jointOffset <= jointCount && mesh.jointSpan <= jointCount - item.jointOffset;
+    };
+    // Binds the static or skinned variant of `pair` only when it changes.
+    VkPipeline bound = VK_NULL_HANDLE;
+    const auto bindFor = [&](bool skinned, VkPipeline staticPipe, VkPipeline skinnedPipe) {
+        const VkPipeline want = skinned ? skinnedPipe : staticPipe;
+        if (want != bound) {
+            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, want);
+            bound = want;
+        }
+    };
+    const VkDeviceSize vbOffsets[2] = {0, 0};
+    const auto drawItemMesh = [&](const DrawItem& item, bool skinned) {
+        const MeshEntry& mesh = meshes[item.mesh.value];
+        const VkBuffer vbs[2] = {mesh.vertexBuffer.handle(),
+                                 skinned ? mesh.skinBuffer.handle() : VK_NULL_HANDLE};
+        vkCmdBindVertexBuffers(cmd, 0, skinned ? 2u : 1u, vbs, vbOffsets);
         vkCmdBindIndexBuffer(cmd, mesh.indexBuffer.handle(), 0, VK_INDEX_TYPE_UINT32);
-        vkCmdPushConstants(cmd, pipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(glm::mat4),
-                           &item.model);
+        const DrawPush push{item.model, glm::vec4(item.emissive, 0.0f),
+                            glm::vec4(item.tint, 1.0f),
+                            glm::uvec4(skinned ? item.jointOffset : 0u, 0u, 0u, 0u)};
+        vkCmdPushConstants(cmd, pipelineLayout, kDrawPushStages, 0, sizeof(DrawPush), &push);
         vkCmdDrawIndexed(cmd, mesh.indexCount, 1, 0, 0, 0);
     };
 
@@ -771,11 +1437,18 @@ void Renderer::Impl::record(VkCommandBuffer cmd, uint32_t imageIndex, uint32_t f
     vkCmdSetViewport(cmd, 0, 1, &shadowViewport);
     vkCmdSetScissor(cmd, 0, 1, &shadowScissor);
     if (!items.empty()) {
-        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, shadowPipeline);
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout, 0, 1,
                                 &frameSets[frame], 0, nullptr);
         for (const DrawItem& item : items) {
-            drawItemMesh(item); // no material set: depth doesn't care about albedo
+            // Bright emitters (laser beams, light strips) ARE light: a beam
+            // casting a shadow line on the floor reads as a bug.
+            if (item.mesh.value >= meshes.size() ||
+                std::max({item.emissive.r, item.emissive.g, item.emissive.b}) > 1.0f) {
+                continue;
+            }
+            const bool skinned = isSkinned(item);
+            bindFor(skinned, shadowPipeline, skinnedShadowPipeline);
+            drawItemMesh(item, skinned); // no material set: depth doesn't care about albedo
         }
     }
     vkCmdEndRendering(cmd);
@@ -787,13 +1460,16 @@ void Renderer::Impl::record(VkCommandBuffer cmd, uint32_t imageIndex, uint32_t f
         VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT, VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
         VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
 
-    // ---- Pass 2: the scene, from the camera.
-    // Swapchain image arrives in UNDEFINED; make it a color attachment.
-    transitionImage(cmd, swapchain->image(imageIndex), VK_IMAGE_ASPECT_COLOR_BIT,
-                    VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-                    VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, VK_ACCESS_2_NONE,
-                    VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
-                    VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT);
+    // ---- Pass 2: the scene, from the camera, into the HDR target.
+    // Cleared every frame, so UNDEFINED is honest; the source scope covers
+    // the previous frame's uses of this shared image (attachment writes, then
+    // sampling by bloom/composite), which makes this the frame-N/N+1 barrier.
+    transitionImage(
+        cmd, hdrImage, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_UNDEFINED,
+        VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+        VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
+        VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
+        VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT);
     // Depth: contents are cleared every frame, so UNDEFINED is honest AND
     // this doubles as the frame-N/N+1 execution barrier on the shared image.
     VkImageAspectFlags depthAspect = VK_IMAGE_ASPECT_DEPTH_BIT;
@@ -811,11 +1487,11 @@ void Renderer::Impl::record(VkCommandBuffer cmd, uint32_t imageIndex, uint32_t f
 
     VkRenderingAttachmentInfo colorAttachment{};
     colorAttachment.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
-    colorAttachment.imageView = swapchain->view(imageIndex);
+    colorAttachment.imageView = hdrView;
     colorAttachment.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-    colorAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+    // The sky pass covers every pixel, so the colour target needs no clear.
+    colorAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
     colorAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-    colorAttachment.clearValue.color = {{0.02f, 0.02f, 0.03f, 1.0f}}; // near-black blue
 
     VkRenderingAttachmentInfo depthAttachment{};
     depthAttachment.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
@@ -844,20 +1520,88 @@ void Renderer::Impl::record(VkCommandBuffer cmd, uint32_t imageIndex, uint32_t f
     vkCmdSetViewport(cmd, 0, 1, &viewport);
     vkCmdSetScissor(cmd, 0, 1, &scissor);
 
+    // Sky first (ADR-030): every pixel, no depth — the meshes draw over it.
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, skyPipeline);
+    bound = skyPipeline;
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout, 0, 1,
+                            &frameSets[frame], 0, nullptr);
+    const uint32_t panorama = sky.panorama.value < textures.size()
+                                  ? sky.panorama.value
+                                  : Renderer::whiteTexture().value;
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout, 1, 1,
+                            &textures[panorama].set, 0, nullptr);
+    vkCmdDraw(cmd, 3, 1, 0, 0);
+
     if (!items.empty()) {
-        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
-        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout, 0, 1,
-                                &frameSets[frame], 0, nullptr);
         for (const DrawItem& item : items) {
+            if (item.mesh.value >= meshes.size()) {
+                continue; // stale/foreign handle: draw nothing rather than crash
+            }
+            const bool skinned = isSkinned(item);
+            bindFor(skinned, pipeline, skinnedPipeline);
             // Set 1 rebinds per item; sorting draws by texture is the P8-era
             // optimization this layout is already shaped for.
+            const uint32_t texture =
+                item.texture.value < textures.size() ? item.texture.value : 0u;
             vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout, 1, 1,
-                                    &textures[item.texture.value].set, 0, nullptr);
-            drawItemMesh(item);
+                                    &textures[texture].set, 0, nullptr);
+            drawItemMesh(item, skinned);
         }
     }
+    vkCmdEndRendering(cmd);
+
+    // Scene done: the post chain samples it from here on.
+    transitionImage(cmd, hdrImage, VK_IMAGE_ASPECT_COLOR_BIT,
+                    VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                    VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                    VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+                    VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT, VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
+                    VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+
+    // ---- Pass 3: bloom chain (leaves bloom mip 0 sampleable either way).
+    recordBloom(cmd);
+
+    // ---- Pass 4: composite into the swapchain image — bloom add, exposure,
+    // ACES tone map — then the UI on top, un-tonemapped, in the same pass.
+    // The fullscreen triangle overwrites every pixel: UNDEFINED + DONT_CARE.
+    transitionImage(cmd, swapchain->image(imageIndex), VK_IMAGE_ASPECT_COLOR_BIT,
+                    VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                    VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, VK_ACCESS_2_NONE,
+                    VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+                    VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT);
+
+    VkRenderingAttachmentInfo swapAttachment{};
+    swapAttachment.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+    swapAttachment.imageView = swapchain->view(imageIndex);
+    swapAttachment.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    swapAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    swapAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+
+    VkRenderingInfo compositeInfo{};
+    compositeInfo.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
+    compositeInfo.renderArea = {{0, 0}, swapchain->extent()};
+    compositeInfo.layerCount = 1;
+    compositeInfo.colorAttachmentCount = 1;
+    compositeInfo.pColorAttachments = &swapAttachment; // NO depth: see queryVkInfo
+
+    vkCmdBeginRendering(cmd, &compositeInfo);
+    vkCmdSetViewport(cmd, 0, 1, &viewport);
+    vkCmdSetScissor(cmd, 0, 1, &scissor);
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, compositePipeline);
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, postLayout, 0, 1, &compositeSet,
+                            0, nullptr);
+    // Every mip of the chain was summed into mip 0; dividing by the count
+    // keeps "intensity" meaning the same thing at any window size.
+    const float bloomStrength =
+        bloomIntensity * kBloomGain / static_cast<float>(bloomViews.size());
+    const PostPush compositePush{glm::vec4(1.0f / static_cast<float>(bloomExtents[0].width),
+                                           1.0f / static_cast<float>(bloomExtents[0].height),
+                                           bloomStrength, exposure)};
+    vkCmdPushConstants(cmd, postLayout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(PostPush),
+                       &compositePush);
+    vkCmdDraw(cmd, 3, 1, 0, 0);
     if (uiHook != nullptr) {
-        uiHook->record(cmd); // editor UI draws last, over the scene
+        uiHook->record(cmd); // editor UI draws last, crisp, over the tone-mapped scene
     }
     vkCmdEndRendering(cmd);
 
@@ -888,16 +1632,28 @@ Renderer::Renderer(Window& window, VulkanContext& context)
     m_impl->createFrameObjects(); // command pool first: texture upload needs it
     m_impl->createShadowResources();
     m_impl->createDescriptors();
-    m_impl->createPipeline();
-    m_impl->createShadowPipeline();
+    m_impl->createPipelineLayout();
+    m_impl->pipeline = m_impl->makeScenePipeline(false);
+    m_impl->skinnedPipeline = m_impl->makeScenePipeline(true);
+    m_impl->shadowPipeline = m_impl->makeShadowPipeline(false);
+    m_impl->skinnedShadowPipeline = m_impl->makeShadowPipeline(true);
+    m_impl->skyPipeline = m_impl->makeSkyPipeline();
+    m_impl->createPostResources();
+    m_impl->createPostTargets();
     // Texture 0 = the built-in checker placeholder (ADR-013), created through
     // the same public path every real asset uses.
     const TextureHandle checker = addTexture(256, 256, makeCheckerTexels(256, 32));
     (void)checker; // handle 0 by construction; defaultTexture() documents it
+    // Texture 1 = plain white (ADR-030): untextured materials and the
+    // texture-table-full fallback. whiteTexture() documents it.
+    constexpr uint8_t kWhite[4] = {255, 255, 255, 255};
+    const TextureHandle white = addTexture(1, 1, kWhite);
+    (void)white;
     FORGE_INFO("renderer ready: dynamic rendering, depth {}, {} frames in flight, "
-               "{}x{} shadow map, checker placeholder as texture 0",
+               "{}x{} shadow map, RGBA16F HDR scene + {}-mip bloom + ACES composite, "
+               "checker placeholder as texture 0",
                m_impl->depthFormat == VK_FORMAT_D32_SFLOAT ? "D32_SFLOAT" : "D+S fallback",
-               kFramesInFlight, kShadowMapSize, kShadowMapSize);
+               kFramesInFlight, kShadowMapSize, kShadowMapSize, m_impl->bloomViews.size());
 }
 
 Renderer::~Renderer() {
@@ -914,6 +1670,11 @@ Renderer::~Renderer() {
         vkDestroyCommandPool(dev, m_impl->commandPool, nullptr);
         vkDestroyPipeline(dev, m_impl->pipeline, nullptr);
         vkDestroyPipeline(dev, m_impl->shadowPipeline, nullptr);
+        vkDestroyPipeline(dev, m_impl->skinnedPipeline, nullptr);
+        vkDestroyPipeline(dev, m_impl->skinnedShadowPipeline, nullptr);
+        vkDestroyPipeline(dev, m_impl->skyPipeline, nullptr);
+        m_impl->destroyPostTargets();
+        m_impl->destroyPostResources();
         vkDestroyPipelineLayout(dev, m_impl->pipelineLayout, nullptr);
         vkDestroyDescriptorPool(dev, m_impl->descriptorPool, nullptr); // frees ALL sets
         vkDestroyDescriptorSetLayout(dev, m_impl->frameSetLayout, nullptr);
@@ -927,6 +1688,9 @@ Renderer::~Renderer() {
         for (auto& ubo : m_impl->frameUbos) {
             ubo = GpuBuffer{};
         }
+        for (auto& joints : m_impl->jointBuffers) {
+            joints = GpuBuffer{};
+        }
         m_impl->destroyDepthResources();
     }
     m_impl->swapchain.reset(); // strict reverse order: swapchain, device, surface
@@ -938,7 +1702,8 @@ Renderer::~Renderer() {
 
 // Shared by addMesh and updateMesh: build device-local buffers via staging.
 void Renderer::Impl::buildMeshEntry(std::span<const Vertex> vertices,
-                                    std::span<const uint32_t> indices, MeshEntry& out) const {
+                                    std::span<const uint32_t> indices,
+                                    std::span<const SkinVertex> skin, MeshEntry& out) const {
     const VkDeviceSize vertexBytes = vertices.size_bytes();
     const VkDeviceSize indexBytes = indices.size_bytes();
     out.vertexBuffer = GpuBuffer(
@@ -950,12 +1715,30 @@ void Renderer::Impl::buildMeshEntry(std::span<const Vertex> vertices,
     uploadToBuffer(*device, commandPool, out.vertexBuffer.handle(), vertices.data(), vertexBytes);
     uploadToBuffer(*device, commandPool, out.indexBuffer.handle(), indices.data(), indexBytes);
     out.indexCount = static_cast<uint32_t>(indices.size());
+    out.skinBuffer = GpuBuffer{};
+    out.jointSpan = 0;
+    if (!skin.empty()) {
+        if (skin.size() != vertices.size()) {
+            throw std::runtime_error("skinned mesh: skin stream must match the vertex count");
+        }
+        out.skinBuffer = GpuBuffer(*device, skin.size_bytes(),
+                                   VK_BUFFER_USAGE_TRANSFER_DST_BIT |
+                                       VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+                                   VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+        uploadToBuffer(*device, commandPool, out.skinBuffer.handle(), skin.data(),
+                       skin.size_bytes());
+        for (const SkinVertex& v : skin) {
+            for (const uint16_t joint : v.joints) {
+                out.jointSpan = std::max(out.jointSpan, static_cast<uint32_t>(joint) + 1u);
+            }
+        }
+    }
 }
 
 MeshHandle Renderer::addMesh(std::span<const Vertex> vertices, std::span<const uint32_t> indices) {
     Impl& impl = *m_impl;
     Impl::MeshEntry entry;
-    impl.buildMeshEntry(vertices, indices, entry);
+    impl.buildMeshEntry(vertices, indices, {}, entry);
     impl.meshes.push_back(std::move(entry));
     const auto handle = static_cast<uint32_t>(impl.meshes.size() - 1);
     FORGE_INFO("mesh[{}] uploaded: {} vertices, {} indices ({} KiB on GPU)", handle,
@@ -964,17 +1747,40 @@ MeshHandle Renderer::addMesh(std::span<const Vertex> vertices, std::span<const u
     return {handle};
 }
 
+MeshHandle Renderer::addSkinnedMesh(std::span<const Vertex> vertices,
+                                    std::span<const uint32_t> indices,
+                                    std::span<const SkinVertex> skin) {
+    Impl& impl = *m_impl;
+    Impl::MeshEntry entry;
+    impl.buildMeshEntry(vertices, indices, skin, entry);
+    impl.meshes.push_back(std::move(entry));
+    const auto handle = static_cast<uint32_t>(impl.meshes.size() - 1);
+    FORGE_INFO("mesh[{}] uploaded (skinned, {} joints): {} vertices, {} indices", handle,
+               impl.meshes.back().jointSpan, vertices.size(), indices.size());
+    return {handle};
+}
+
 void Renderer::updateMesh(MeshHandle handle, std::span<const Vertex> vertices,
                           std::span<const uint32_t> indices) {
     Impl& impl = *m_impl;
     impl.device->waitIdle(); // in-flight frames may still read the old buffers
-    impl.buildMeshEntry(vertices, indices, impl.meshes.at(handle.value));
+    impl.buildMeshEntry(vertices, indices, {}, impl.meshes.at(handle.value));
     FORGE_INFO("mesh[{}] hot-reloaded: {} vertices, {} indices", handle.value, vertices.size(),
                indices.size());
 }
 
 TextureHandle Renderer::addTexture(uint32_t width, uint32_t height, std::span<const uint8_t> rgba) {
     Impl& impl = *m_impl;
+    // Full table: degrade, never throw (a model pack must not kill a frame).
+    // Handles 0 and 1 are created in the constructor, so the fallback exists.
+    if (impl.textures.size() >= kMaxTextures) {
+        if (!impl.textureCapWarned) {
+            impl.textureCapWarned = true;
+            FORGE_WARN("texture table full ({} textures): further textures draw as white",
+                       kMaxTextures);
+        }
+        return whiteTexture();
+    }
     Impl::TextureEntry entry;
     entry.texture =
         std::make_unique<VulkanTexture>(*impl.device, impl.commandPool, width, height, rgba);
@@ -996,7 +1802,8 @@ void Renderer::updateTexture(TextureHandle handle, uint32_t width, uint32_t heig
     FORGE_INFO("texture[{}] hot-reloaded: {}x{}", handle.value, width, height);
 }
 
-void Renderer::drawFrame(const Camera& camera, std::span<const DrawItem> items) {
+void Renderer::drawFrame(const Camera& camera, std::span<const DrawItem> items,
+                         std::span<const glm::mat4> joints) {
     Impl& impl = *m_impl;
     const VkDevice dev = impl.device->device();
 
@@ -1055,7 +1862,36 @@ void Renderer::drawFrame(const Camera& camera, std::span<const DrawItem> items) 
     ubo.cameraPos = glm::vec4(camera.position, 1.0f);
     ubo.lightDirection = glm::vec4(lightDir, 0.0f);
     ubo.lightColor = glm::vec4(impl.lightColor, 1.0f); // rgb * HDR intensity
+    ubo.fogColor = glm::vec4(impl.fogColor, impl.fogDensity);
+    ubo.ambientSky = glm::vec4(kAmbientSkyBase + impl.lightColor * kAmbientSkyFromKey, 0.0f);
+    ubo.ambientGround =
+        glm::vec4(kAmbientGroundBase + impl.lightColor * kAmbientGroundFromKey, 0.0f);
+    ubo.counts = glm::vec4(static_cast<float>(impl.pointLightCount), 0.0f, 0.0f, 0.0f);
+    for (uint32_t i = 0; i < impl.pointLightCount; ++i) {
+        const PointLight& light = impl.pointLights[i];
+        ubo.pointPosRadius[i] = glm::vec4(light.position, light.radius);
+        ubo.pointColor[i] = glm::vec4(light.color, 0.0f);
+    }
+    // Sky tail (ADR-030). The sun disc tracks the key light: its direction
+    // AND its colour (setLighting), scaled by the sky's sunIntensity.
+    const Sky& sky = impl.sky;
+    const bool panorama = sky.panorama.value != Sky::kNoPanorama &&
+                          sky.panorama.value < impl.textures.size();
+    ubo.invViewProj = glm::inverse(ubo.viewProj);
+    ubo.skyZenith = glm::vec4(sky.zenith, 0.0f);
+    ubo.skyHorizon = glm::vec4(sky.horizon, glm::radians(sky.panoramaYaw));
+    ubo.skyGround = glm::vec4(sky.ground, 0.0f);
+    ubo.skySun = glm::vec4(impl.lightColor * sky.sunIntensity,
+                           sky.sunSize > 0.0f ? std::cos(glm::radians(sky.sunSize)) : 2.0f);
+    ubo.skyParams = glm::vec4(panorama ? 1.0f : 0.0f, sky.panoramaIntensity, camera.farPlane,
+                              sky.sunHalo);
     impl.frameUbos[frame].writeBytes(&ubo, sizeof(ubo));
+    // Joint palette (ADR-030): same fence-guarded slot as the UBO. Overflow
+    // is clipped; draws whose slice no longer fits fall back to bind pose.
+    impl.jointCount = static_cast<uint32_t>(std::min<size_t>(joints.size(), kMaxJoints));
+    if (impl.jointCount > 0) {
+        impl.jointBuffers[frame].writeBytes(joints.data(), sizeof(glm::mat4) * impl.jointCount);
+    }
 
     // Reset the fence only once we know we WILL submit (else: deadlock).
     vkResetFences(dev, 1, &impl.inFlight[frame]);
@@ -1119,6 +1955,39 @@ void Renderer::setLighting(glm::vec3 color, glm::vec3 direction) {
     }
 }
 
+void Renderer::setPointLights(std::span<const PointLight> lights) {
+    Impl& impl = *m_impl;
+    const size_t count = std::min(lights.size(), kMaxPointLights);
+    uint32_t used = 0;
+    for (size_t i = 0; i < count; ++i) {
+        if (lights[i].radius > 0.0f) { // a zero-radius light lights nothing
+            impl.pointLights[used++] = lights[i];
+        }
+    }
+    impl.pointLightCount = used;
+}
+
+void Renderer::setFog(glm::vec3 color, float density) {
+    m_impl->fogColor = glm::max(color, glm::vec3(0.0f));
+    m_impl->fogDensity = std::max(density, 0.0f);
+}
+
+void Renderer::setExposure(float exposure) { m_impl->exposure = std::max(exposure, 0.0f); }
+
+void Renderer::setBloom(float intensity) { m_impl->bloomIntensity = std::max(intensity, 0.0f); }
+
+void Renderer::setSky(const Sky& sky) {
+    Sky clean = sky;
+    clean.zenith = glm::max(clean.zenith, glm::vec3(0.0f));
+    clean.horizon = glm::max(clean.horizon, glm::vec3(0.0f));
+    clean.ground = glm::max(clean.ground, glm::vec3(0.0f));
+    clean.sunSize = std::clamp(clean.sunSize, 0.0f, 45.0f);
+    clean.sunIntensity = std::max(clean.sunIntensity, 0.0f);
+    clean.sunHalo = std::max(clean.sunHalo, 0.0f);
+    clean.panoramaIntensity = std::max(clean.panoramaIntensity, 0.0f);
+    m_impl->sky = clean;
+}
+
 namespace internal {
 RendererVkInfo queryVkInfo(const Renderer& renderer) {
     const Renderer::Impl& impl = *renderer.m_impl;
@@ -1129,7 +1998,9 @@ RendererVkInfo queryVkInfo(const Renderer& renderer) {
     info.graphicsQueue = impl.device->graphicsQueue();
     info.graphicsFamily = impl.device->graphicsFamily();
     info.colorFormat = impl.swapchain->format();
-    info.depthFormat = impl.depthFormat;
+    // The UI draws in the composite pass: swapchain color only, NO depth
+    // attachment — its pipeline must be created to match.
+    info.depthFormat = VK_FORMAT_UNDEFINED;
     info.imageCount = impl.swapchain->imageCount();
     return info;
 }

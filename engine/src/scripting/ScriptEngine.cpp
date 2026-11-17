@@ -9,6 +9,8 @@
 #define SOL_ALL_SAFETIES_ON 1
 #include <sol/sol.hpp>
 
+#include <glm/geometric.hpp>
+
 #include <cctype>
 #include <optional>
 #include <tuple>
@@ -24,6 +26,9 @@ namespace {
 std::optional<Key> nameToKey(const std::string& name) {
     if (name == "space") {
         return Key::Space;
+    }
+    if (name == "shift") {
+        return Key::LeftShift;
     }
     if (name.size() == 1) {
         const char c = name[0];
@@ -56,7 +61,14 @@ ScriptEngine::ScriptEngine() : m_impl(std::make_unique<Impl>()) {
     // vec3: scripts speak the same math the engine does.
     lua.new_usertype<glm::vec3>("vec3", sol::call_constructor,
                                 sol::constructors<glm::vec3(float, float, float)>(), "x",
-                                &glm::vec3::x, "y", &glm::vec3::y, "z", &glm::vec3::z);
+                                &glm::vec3::x, "y", &glm::vec3::y, "z", &glm::vec3::z,
+                                sol::meta_function::addition,
+                                [](const glm::vec3& a, const glm::vec3& b) { return a + b; },
+                                sol::meta_function::subtraction,
+                                [](const glm::vec3& a, const glm::vec3& b) { return a - b; },
+                                sol::meta_function::multiplication,
+                                [](const glm::vec3& a, float k) { return a * k; }, "length",
+                                [](const glm::vec3& a) { return glm::length(a); });
 
     sol::table forge = lua.create_named_table("forge");
     forge.set_function("log", [](const std::string& message) { FORGE_INFO("[lua] {}", message); });
@@ -195,10 +207,41 @@ void ScriptEngine::bindScene() {
     sceneTable.set_function("spawn", [this](const std::string& name, const glm::vec3& position,
                                             const glm::vec3& scale, const glm::vec3& halfExtents,
                                             const std::string& texture, bool dynamic,
-                                            sol::optional<std::string> mesh) {
-        if (onSpawnEntity) {
-            onSpawnEntity(name, position, scale, halfExtents, texture, dynamic, mesh.value_or(""));
+                                            sol::optional<std::string> mesh,
+                                            sol::optional<sol::table> opts) {
+        if (!onSpawnEntity) {
+            return;
         }
+        SpawnOptions options;
+        if (opts) {
+            options.kinematic = opts->get_or("kinematic", false);
+            options.lockRotation = opts->get_or("lockRotation", false);
+            options.friction = opts->get_or("friction", options.friction);
+            options.density = opts->get_or("density", options.density);
+            options.restitution = opts->get_or("restitution", options.restitution);
+        }
+        onSpawnEntity(name, position, scale, halfExtents, texture, dynamic, mesh.value_or(""),
+                      options);
+    });
+    // ---- Upgrade pass (ADR-029): emissive/tint, body<->name, existence.
+    sceneTable.set_function("setEmissive", [this](const std::string& name, const glm::vec3& e) {
+        if (onSetEntityEmissive) {
+            onSetEntityEmissive(name, e);
+        }
+    });
+    sceneTable.set_function("setTint", [this](const std::string& name, const glm::vec3& t) {
+        if (onSetEntityTint) {
+            onSetEntityTint(name, t);
+        }
+    });
+    sceneTable.set_function("exists", [this](const std::string& name) {
+        return onEntityExists ? onEntityExists(name) : false;
+    });
+    sceneTable.set_function("bodyName", [this](uint32_t body) {
+        return onBodyName ? onBodyName(body) : std::string();
+    });
+    sceneTable.set_function("bodyId", [this](const std::string& name) {
+        return onBodyId ? onBodyId(name) : 0U;
     });
     sol::table playerTable = forge.create_named("player");
     playerTable.set_function(
@@ -230,6 +273,31 @@ void ScriptEngine::bindScene() {
         }
     });
 
+    playerTable.set_function("push", [this](const glm::vec3& velocity) {
+        if (onPushPlayer) {
+            onPushPlayer(velocity);
+        }
+    });
+    playerTable.set_function(
+        "velocity", [this]() { return onPlayerVelocity ? onPlayerVelocity() : glm::vec3(0.0f); });
+    playerTable.set_function("grounded",
+                             [this]() { return onPlayerGrounded ? onPlayerGrounded() : true; });
+    // holding() -> entity name, or nil when the glove is empty.
+    playerTable.set_function("holding", [this]() -> sol::optional<std::string> {
+        if (onPlayerHolding) {
+            std::string name = onPlayerHolding();
+            if (!name.empty()) {
+                return name;
+            }
+        }
+        return sol::nullopt;
+    });
+    playerTable.set_function("drop", [this]() {
+        if (onPlayerDrop) {
+            onPlayerDrop();
+        }
+    });
+
     // forge.game.win(): the script signals the run is complete; the host
     // raises the win screen (week 6). Game/menu state is the HOST's business.
     sol::table gameTable = forge.create_named("game");
@@ -246,6 +314,17 @@ void ScriptEngine::bindScene() {
         }
     });
 
+    // forge.game.save(key, number) / load(key): tiny persistent store (best
+    // time, collectibles). Keys are [a-z0-9_]; the host owns the file.
+    gameTable.set_function("save", [this](const std::string& key, double value) {
+        if (onSaveValue) {
+            onSaveValue(key, value);
+        }
+    });
+    gameTable.set_function("load", [this](const std::string& key) {
+        return onLoadValue ? onLoadValue(key) : 0.0;
+    });
+
     // forge.render.set_light(color[, dir]): per-room mood. dir defaults to the
     // zero vector -> host keeps its current key-light direction.
     sol::table renderTable = forge.create_named("render");
@@ -256,12 +335,87 @@ void ScriptEngine::bindScene() {
                                  }
                              });
 
+    // Local lights by id, fog, exposure, bloom (upgrade pass).
+    renderTable.set_function("light", [this](const std::string& id, const glm::vec3& position,
+                                             const glm::vec3& color, sol::optional<float> radius) {
+        if (onSetLight) {
+            onSetLight(id, position, color, radius.value_or(6.0f));
+        }
+    });
+    renderTable.set_function("clear_light", [this](const std::string& id) {
+        if (onClearLight) {
+            onClearLight(id);
+        }
+    });
+    renderTable.set_function("set_fog", [this](const glm::vec3& color, float density) {
+        if (onSetFog) {
+            onSetFog(color, density);
+        }
+    });
+    renderTable.set_function("set_exposure", [this](float exposure) {
+        if (onSetExposure) {
+            onSetExposure(exposure);
+        }
+    });
+    renderTable.set_function("set_bloom", [this](float intensity) {
+        if (onSetBloom) {
+            onSetBloom(intensity);
+        }
+    });
+    // set_sky([{zenith=, horizon=, ground=, sun_size=, sun_intensity=,
+    // sun_halo=, texture=, texture_intensity=, texture_yaw=}]) — ADR-030.
+    renderTable.set_function("set_sky", [this](sol::optional<sol::table> opts) {
+        SkyOptions sky;
+        if (opts) {
+            const auto vec = [&](const char* key) -> std::optional<glm::vec3> {
+                if (const sol::optional<glm::vec3> v = (*opts)[key]) {
+                    return *v;
+                }
+                return std::nullopt;
+            };
+            const auto num = [&](const char* key) -> std::optional<float> {
+                if (const sol::optional<float> v = (*opts)[key]) {
+                    return *v;
+                }
+                return std::nullopt;
+            };
+            sky.zenith = vec("zenith");
+            sky.horizon = vec("horizon");
+            sky.ground = vec("ground");
+            sky.sunSize = num("sun_size");
+            sky.sunIntensity = num("sun_intensity");
+            sky.sunHalo = num("sun_halo");
+            sky.texture = opts->get_or("texture", std::string());
+            sky.textureIntensity = num("texture_intensity");
+            sky.textureYaw = num("texture_yaw");
+        }
+        if (onSetSky) {
+            onSetSky(sky);
+        }
+    });
+    sol::table cameraTable = forge.create_named("camera");
+    cameraTable.set_function("shake", [this](float amount) {
+        if (onCameraShake) {
+            onCameraShake(amount);
+        }
+    });
+
     // forge.hud.set_hint(text): the per-room objective line (week 7). The
     // script decides the words; the host draws them. "" clears the hint.
     sol::table hudTable = forge.create_named("hud");
     hudTable.set_function("set_hint", [this](const std::string& text) {
         if (onSetHint) {
             onSetHint(text);
+        }
+    });
+    hudTable.set_function("toast", [this](const std::string& text, sol::optional<float> seconds) {
+        if (onToast) {
+            onToast(text, seconds.value_or(2.5f));
+        }
+    });
+    hudTable.set_function("set_stat", [this](const std::string& key, const std::string& value) {
+        if (onSetStat) {
+            onSetStat(key, value);
         }
     });
     // forge.hud.set_reticle(mode, value): crosshair answer-back (week 12).
@@ -272,13 +426,47 @@ void ScriptEngine::bindScene() {
             onSetReticle(mode, value);
         }
     });
+
+    // ---- Skeletal animation (ADR-030). Entities spawned from an animated
+    // model own an animator; the host resolves names.
+    sol::table animTable = forge.create_named("anim");
+    animTable.set_function("play", [this](const std::string& entity, const std::string& clip,
+                                          sol::optional<sol::table> opts) {
+        AnimPlayOptions options;
+        if (opts) {
+            options.loop = opts->get_or("loop", options.loop);
+            options.speed = opts->get_or("speed", options.speed);
+            options.fade = opts->get_or("fade", options.fade);
+            options.restart = opts->get_or("restart", options.restart);
+        }
+        return onAnimPlay ? onAnimPlay(entity, clip, options) : false;
+    });
+    animTable.set_function("clips", [this](const std::string& model) {
+        return sol::as_table(onAnimClips ? onAnimClips(model) : std::vector<std::string>{});
+    });
+    animTable.set_function(
+        "time", [this](const std::string& entity)
+                    -> std::tuple<sol::optional<float>, sol::optional<float>> {
+            if (onAnimTime) {
+                if (const auto t = onAnimTime(entity)) {
+                    return {t->first, t->second};
+                }
+            }
+            return {sol::nullopt, sol::nullopt};
+        });
 }
 
 void ScriptEngine::bindAudio(Audio& audio) {
     sol::table forge = m_impl->lua["forge"];
     sol::table aud = forge.create_named("audio");
-    aud.set_function("play", [&audio](const std::string& path, sol::optional<float> volume) {
-        audio.play(path, volume.value_or(1.0f));
+    aud.set_function("play", [&audio](const std::string& path, sol::optional<float> volume,
+                                      sol::optional<float> pitch) {
+        audio.play(path, volume.value_or(1.0f), pitch.value_or(1.0f));
+    });
+    // Positional one-shot: attenuated + panned against the host's listener.
+    aud.set_function("play_at", [&audio](const std::string& path, const glm::vec3& position,
+                                         sol::optional<float> volume, sol::optional<float> pitch) {
+        audio.playAt(path, position, volume.value_or(1.0f), pitch.value_or(1.0f));
     });
     // Persistent looping voices (ambient room tone, music bed). Returns an
     // integer handle scripts can revolume or stop; 0 means "not playing".
@@ -294,8 +482,15 @@ void ScriptEngine::bindAudio(Audio& audio) {
 void ScriptEngine::bindFx(fx::ParticleEmitter& emitter) {
     sol::table forge = m_impl->lua["forge"];
     sol::table fxTable = forge.create_named("fx");
-    fxTable.set_function(
-        "burst", [&emitter](const glm::vec3& origin, int count) { emitter.burst(origin, count); });
+    // burst(origin, count[, color]): color is emissive HDR radiance.
+    fxTable.set_function("burst", [&emitter](const glm::vec3& origin, int count,
+                                             sol::optional<glm::vec3> color) {
+        if (color) {
+            emitter.burst(origin, count, *color);
+        } else {
+            emitter.burst(origin, count);
+        }
+    });
 }
 
 bool ScriptEngine::runFile(const std::string& path) {

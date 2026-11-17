@@ -98,9 +98,24 @@ FetchContent_MakeAvailable(stb)
 add_library(stb INTERFACE)
 target_include_directories(stb SYSTEM INTERFACE ${stb_SOURCE_DIR})
 
+# ---- cgltf v1.15 (ADR-030) — consumed by: engine/src/assets/GltfLoader.cpp
+# glTF/GLB import (meshes, materials, skins, animation clips). Single-header,
+# no CMakeLists upstream: populate and wrap in an INTERFACE target, like stb.
+# Chosen over Assimp's glTF importer because skinning needs the spec's exact
+# semantics — joints by node index, STEP interpolation, normalized accessors.
+FetchContent_Declare(cgltf
+    GIT_REPOSITORY https://github.com/jkuhlmann/cgltf.git
+    GIT_TAG        v1.15
+    GIT_SHALLOW    TRUE
+)
+FetchContent_MakeAvailable(cgltf)
+add_library(cgltf INTERFACE)
+target_include_directories(cgltf SYSTEM INTERFACE ${cgltf_SOURCE_DIR})
+
 # ---- Assimp v5.4.3 (P5) — consumed by: engine/src/assets/MeshLoader.cpp
 # Importers are opt-IN: the all-formats build is enormous and we read
-# exactly two formats. Add importers here when the game actually ships
+# exactly one format here (OBJ; glTF goes through cgltf above since
+# ADR-030). Add importers here when the game actually ships
 # assets in them — not speculatively (ADR-003 spirit, ADR-016 letter).
 set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
 set(ASSIMP_BUILD_TESTS OFF CACHE BOOL "" FORCE)
@@ -109,7 +124,8 @@ set(ASSIMP_NO_EXPORT ON CACHE BOOL "" FORCE)
 set(ASSIMP_INSTALL OFF CACHE BOOL "" FORCE)
 set(ASSIMP_BUILD_ALL_IMPORTERS_BY_DEFAULT OFF CACHE BOOL "" FORCE)
 set(ASSIMP_BUILD_OBJ_IMPORTER ON CACHE BOOL "" FORCE)
-set(ASSIMP_BUILD_GLTF_IMPORTER ON CACHE BOOL "" FORCE)
+# glTF moved to cgltf (ADR-030): Assimp now reads OBJ (+ MTL) only.
+set(ASSIMP_BUILD_GLTF_IMPORTER OFF CACHE BOOL "" FORCE)
 set(ASSIMP_WARNINGS_AS_ERRORS OFF CACHE BOOL "" FORCE)
 # Assimp CACHE-injects CMAKE_DEBUG_POSTFIX "d" GLOBALLY, renaming OUR libs
 # (forge_engine -> forge_engined). Its build, its postfix — not ours.

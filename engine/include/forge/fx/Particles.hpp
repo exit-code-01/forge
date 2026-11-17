@@ -20,7 +20,14 @@ namespace forge::fx {
 class ParticleEmitter {
 public:
     // Spray `count` particles from `origin`, upward-biased random velocity.
-    void burst(const glm::vec3& origin, int count) {
+    // color is EMISSIVE radiance (HDR; > 1 blooms): sparks glow, they are
+    // not lit crumbs. The default is the warm welding-spark orange.
+    void burst(const glm::vec3& origin, int count,
+               const glm::vec3& color = glm::vec3(3.2f, 1.6f, 0.5f)) {
+        constexpr size_t kMaxParticles = 1500; // a hard cap beats a frame spike
+        if (m_particles.size() >= kMaxParticles) {
+            return;
+        }
         std::uniform_real_distribution<float> dir(-1.0f, 1.0f);
         std::uniform_real_distribution<float> up(1.5f, 4.5f);
         std::uniform_real_distribution<float> life(0.35f, 0.9f);
@@ -31,6 +38,7 @@ public:
             p.velocity = {dir(m_rng) * 2.0f, up(m_rng), dir(m_rng) * 2.0f};
             p.maxLife = p.life = life(m_rng);
             p.size = size(m_rng);
+            p.color = color;
             m_particles.push_back(p);
         }
     }
@@ -55,9 +63,11 @@ public:
     void appendDrawItems(std::vector<DrawItem>& out, MeshHandle mesh, TextureHandle texture) const {
         for (const Particle& p : m_particles) {
             const float scale = p.size * (p.life / p.maxLife);
+            const float fade = p.life / p.maxLife; // cool as they die
             out.push_back(
                 {mesh, texture,
-                 glm::scale(glm::translate(glm::mat4(1.0f), p.position), glm::vec3(scale))});
+                 glm::scale(glm::translate(glm::mat4(1.0f), p.position), glm::vec3(scale)),
+                 p.color * fade, p.color * 0.3f});
         }
     }
 
@@ -70,6 +80,7 @@ private:
         float life = 0.0f;
         float maxLife = 1.0f;
         float size = 0.05f;
+        glm::vec3 color{3.2f, 1.6f, 0.5f};
     };
     std::vector<Particle> m_particles;
     std::mt19937 m_rng{20260703}; // deterministic: same seed, same sparks

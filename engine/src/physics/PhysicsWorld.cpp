@@ -27,6 +27,7 @@
 #include <algorithm>
 #include <memory>
 #include <thread>
+#include <unordered_map>
 
 namespace forge {
 
@@ -95,6 +96,13 @@ struct PhysicsWorld::Impl {
     // VAULT week 1: the one player character (see header rationale).
     JPH::Ref<JPH::CharacterVirtual> character;
     float characterVerticalVelocity = 0.0f;
+    float characterAirTime = 0.0f; // seconds since last grounded (coyote)
+    bool characterJumped = false;  // a jump is in flight (no double coyote)
+    glm::vec3 characterPush{0.0f}; // one-frame external velocity
+    glm::vec3 characterLastVelocity{0.0f};
+
+    // Kinematic targets: consumed tick by tick inside update().
+    std::unordered_map<uint32_t, glm::vec3> kinematicTargets;
 };
 
 PhysicsWorld::PhysicsWorld() : m_impl(std::make_unique<Impl>()) {
@@ -132,31 +140,83 @@ PhysicsWorld::~PhysicsWorld() {
 
 BodyId PhysicsWorld::addBox(const glm::vec3& halfExtents, const glm::vec3& position, BodyType type,
                             float restitution) {
-    const bool dynamic = type == BodyType::Dynamic;
+    BoxDesc desc;
+    desc.halfExtents = halfExtents;
+    desc.position = position;
+    desc.type = type;
+    desc.restitution = restitution;
+    return addBox(desc);
+}
+
+BodyId PhysicsWorld::addBox(const BoxDesc& desc) {
+    const glm::vec3& halfExtents = desc.halfExtents;
+    const bool isStatic = desc.type == BodyType::Static;
     // Convex radius (edge rounding for stable contacts) must fit inside the
     // box — thin slabs need it shrunk or BoxShape rejects them.
     const float minHalf = std::min({halfExtents.x, halfExtents.y, halfExtents.z});
     const float convexRadius = std::min(JPH::cDefaultConvexRadius, minHalf * 0.5f);
 
+    JPH::EMotionType motion = JPH::EMotionType::Static;
+    if (desc.type == BodyType::Dynamic) {
+        motion = JPH::EMotionType::Dynamic;
+    } else if (desc.type == BodyType::Kinematic) {
+        motion = JPH::EMotionType::Kinematic;
+    }
+    JPH::Ref<JPH::BoxShape> shape =
+        new JPH::BoxShape(JPH::Vec3(halfExtents.x, halfExtents.y, halfExtents.z), convexRadius);
+    shape->SetDensity(desc.density);
     JPH::BodyCreationSettings settings(
-        new JPH::BoxShape(JPH::Vec3(halfExtents.x, halfExtents.y, halfExtents.z), convexRadius),
-        JPH::RVec3(position.x, position.y, position.z), JPH::Quat::sIdentity(),
-        dynamic ? JPH::EMotionType::Dynamic : JPH::EMotionType::Static,
-        dynamic ? layers::kMoving : layers::kNonMoving);
-    settings.mRestitution = restitution;
+        shape, JPH::RVec3(desc.position.x, desc.position.y, desc.position.z),
+        JPH::Quat::sIdentity(), motion, isStatic ? layers::kNonMoving : layers::kMoving);
+    settings.mRestitution = desc.restitution;
+    settings.mFriction = desc.friction;
+    if (desc.lockRotation) {
+        settings.mAllowedDOFs = JPH::EAllowedDOFs::TranslationX | JPH::EAllowedDOFs::TranslationY |
+                                JPH::EAllowedDOFs::TranslationZ;
+    }
 
     const JPH::BodyID id = m_impl->system->GetBodyInterface().CreateAndAddBody(
-        settings, dynamic ? JPH::EActivation::Activate : JPH::EActivation::DontActivate);
+        settings, isStatic ? JPH::EActivation::DontActivate : JPH::EActivation::Activate);
     return {id.GetIndexAndSequenceNumber()};
+}
+
+void PhysicsWorld::moveKinematic(BodyId id, const glm::vec3& targetPosition) {
+    if (m_impl->system->GetBodyInterface().GetMotionType(JPH::BodyID(id.value)) ==
+        JPH::EMotionType::Kinematic) {
+        m_impl->kinematicTargets[id.value] = targetPosition;
+    }
+}
+
+BodyType PhysicsWorld::bodyType(BodyId id) const {
+    switch (m_impl->system->GetBodyInterface().GetMotionType(JPH::BodyID(id.value))) {
+    case JPH::EMotionType::Dynamic:
+        return BodyType::Dynamic;
+    case JPH::EMotionType::Kinematic:
+        return BodyType::Kinematic;
+    default:
+        return BodyType::Static;
+    }
 }
 
 void PhysicsWorld::update(float dtSeconds) {
     constexpr float kFixedStep = 1.0f / 60.0f;
     constexpr float kMaxFrameDt = 0.1f; // debugger pause != 40 catch-up steps
     m_impl->accumulator += std::min(dtSeconds, kMaxFrameDt);
+    int stepsLeft = static_cast<int>(m_impl->accumulator / kFixedStep);
+    JPH::BodyInterface& bodies = m_impl->system->GetBodyInterface();
     while (m_impl->accumulator >= kFixedStep) {
+        // Kinematic bodies chase their targets with a REAL velocity spread
+        // over this frame's remaining ticks — that velocity is what carries
+        // riders and shoves crates. Arrived bodies get zero velocity.
+        for (const auto& [raw, target] : m_impl->kinematicTargets) {
+            const JPH::BodyID body(raw);
+            bodies.MoveKinematic(body, JPH::RVec3(target.x, target.y, target.z),
+                                 bodies.GetRotation(body),
+                                 kFixedStep * static_cast<float>(std::max(stepsLeft, 1)));
+        }
         m_impl->system->Update(kFixedStep, 1, m_impl->tempAllocator.get(), m_impl->jobSystem.get());
         m_impl->accumulator -= kFixedStep;
+        --stepsLeft;
     }
     // Render sees the last completed tick; interpolation between ticks is
     // P8 polish, invisible at 60 Hz render / 60 Hz sim.
@@ -184,8 +244,13 @@ void PhysicsWorld::teleport(BodyId id, const glm::vec3& position) {
     const JPH::BodyID body(id.value);
     bodies.SetPositionAndRotation(body, JPH::RVec3(position.x, position.y, position.z),
                                   bodies.GetRotation(body), JPH::EActivation::Activate);
-    if (bodies.GetMotionType(body) == JPH::EMotionType::Dynamic) {
+    if (bodies.GetMotionType(body) != JPH::EMotionType::Static) {
         bodies.SetLinearAndAngularVelocity(body, JPH::Vec3::sZero(), JPH::Vec3::sZero());
+    }
+    // A teleported kinematic body forgets where it was heading.
+    if (const auto it = m_impl->kinematicTargets.find(id.value);
+        it != m_impl->kinematicTargets.end()) {
+        it->second = position;
     }
 }
 
@@ -215,6 +280,7 @@ glm::vec3 PhysicsWorld::linearVelocity(BodyId id) const {
 void PhysicsWorld::removeBody(BodyId id) {
     JPH::BodyInterface& bodies = m_impl->system->GetBodyInterface();
     const JPH::BodyID body(id.value);
+    m_impl->kinematicTargets.erase(id.value);
     bodies.RemoveBody(body);
     bodies.DestroyBody(body);
 }
@@ -231,27 +297,69 @@ void PhysicsWorld::createCharacter(const glm::vec3& position, float radius,
                2.0f * (cylinderHalfHeight + radius));
 }
 
-void PhysicsWorld::moveCharacter(const glm::vec3& horizontalVelocity, bool jump, float dtSeconds) {
+bool PhysicsWorld::moveCharacter(const glm::vec3& horizontalVelocity, bool jump, float dtSeconds) {
+    constexpr float kCoyoteSeconds = 0.1f;
+    constexpr float kJumpSpeed = 5.5f;
     JPH::CharacterVirtual& character = *m_impl->character;
     const bool grounded =
         character.GetGroundState() == JPH::CharacterVirtual::EGroundState::OnGround;
+
+    // Moving ground (kinematic platforms): inherit its velocity while we
+    // stand on it, so a carousel CARRIES the player instead of sliding out
+    // from under their feet.
+    character.UpdateGroundVelocity();
+    JPH::Vec3 ground = JPH::Vec3::sZero();
+    bool jumped = false;
     if (grounded) {
-        m_impl->characterVerticalVelocity = jump ? 5.5f : 0.0f;
+        ground = character.GetGroundVelocity();
+        m_impl->characterAirTime = 0.0f;
+        m_impl->characterJumped = false;
+        m_impl->characterVerticalVelocity = 0.0f;
     } else {
+        m_impl->characterAirTime += dtSeconds;
         m_impl->characterVerticalVelocity -= 9.81f * dtSeconds;
     }
-    character.SetLinearVelocity(
-        JPH::Vec3(horizontalVelocity.x, m_impl->characterVerticalVelocity, horizontalVelocity.z));
+    // Coyote time: the jump still fires just after walking off an edge.
+    if (jump && !m_impl->characterJumped &&
+        (grounded || m_impl->characterAirTime <= kCoyoteSeconds)) {
+        m_impl->characterVerticalVelocity = kJumpSpeed;
+        m_impl->characterJumped = true;
+        jumped = true;
+    }
+    const glm::vec3 push = m_impl->characterPush;
+    m_impl->characterPush = glm::vec3(0.0f);
+    const float wantY = m_impl->characterVerticalVelocity + push.y +
+                        (jumped ? std::max(ground.GetY(), 0.0f) : ground.GetY());
+    character.SetLinearVelocity(JPH::Vec3(horizontalVelocity.x + push.x + ground.GetX(), wantY,
+                                          horizontalVelocity.z + push.z + ground.GetZ()));
 
     // ExtendedUpdate = move + slide + stick-to-floor + walk-stairs, the
     // whole character-controller kitchen in one Jolt call.
     JPH::CharacterVirtual::ExtendedUpdateSettings updateSettings;
     updateSettings.mWalkStairsStepUp = JPH::Vec3(0.0f, 0.35f, 0.0f);
+    if (jumped || wantY > 0.5f) {
+        // Leaving the ground on purpose: stick-to-floor would yank us back.
+        updateSettings.mStickToFloorStepDown = JPH::Vec3::sZero();
+    }
     character.ExtendedUpdate(dtSeconds, m_impl->system->GetGravity(), updateSettings,
                              m_impl->system->GetDefaultBroadPhaseLayerFilter(layers::kMoving),
                              m_impl->system->GetDefaultLayerFilter(layers::kMoving),
                              JPH::BodyFilter{}, JPH::ShapeFilter{}, *m_impl->tempAllocator);
+
+    // Head-bonk fix: the solver clips our velocity against a ceiling, but the
+    // integrator above kept its own upward speed — without this the player
+    // hangs under a door frame until gravity eats the stale jump velocity.
+    const JPH::Vec3 actual = character.GetLinearVelocity();
+    if (m_impl->characterVerticalVelocity > 0.0f && actual.GetY() < wantY * 0.5f) {
+        m_impl->characterVerticalVelocity = 0.0f;
+    }
+    m_impl->characterLastVelocity = {actual.GetX(), actual.GetY(), actual.GetZ()};
+    return jumped;
 }
+
+void PhysicsWorld::pushCharacter(const glm::vec3& velocity) { m_impl->characterPush += velocity; }
+
+glm::vec3 PhysicsWorld::characterVelocity() const { return m_impl->characterLastVelocity; }
 
 glm::vec3 PhysicsWorld::characterPosition() const {
     const JPH::RVec3 p = m_impl->character->GetPosition();
@@ -262,6 +370,9 @@ void PhysicsWorld::setCharacterPosition(const glm::vec3& position) {
     m_impl->character->SetPosition(JPH::RVec3(position.x, position.y, position.z));
     m_impl->character->SetLinearVelocity(JPH::Vec3::sZero());
     m_impl->characterVerticalVelocity = 0.0f; // else the next frame re-applies the fall
+    m_impl->characterPush = glm::vec3(0.0f);
+    m_impl->characterAirTime = 0.0f;
+    m_impl->characterJumped = false;
 }
 
 std::vector<BodyId> PhysicsWorld::overlapBox(const glm::vec3& center,
@@ -276,8 +387,13 @@ std::vector<BodyId> PhysicsWorld::overlapBox(const glm::vec3& center,
         box, collector, JPH::SpecifiedBroadPhaseLayerFilter(JPH::BroadPhaseLayer(1)));
     std::vector<BodyId> out;
     out.reserve(collector.mHits.size());
+    const JPH::BodyInterface& bodyInterface = m_impl->system->GetBodyInterface();
     for (const JPH::BodyID& id : collector.mHits) {
-        out.push_back({id.GetIndexAndSequenceNumber()});
+        // Kinematic platforms share the moving broadphase layer but are not
+        // "weight" — a lift must never press a plate or shatter glass.
+        if (bodyInterface.GetMotionType(id) == JPH::EMotionType::Dynamic) {
+            out.push_back({id.GetIndexAndSequenceNumber()});
+        }
     }
     return out;
 }

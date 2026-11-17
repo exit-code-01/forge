@@ -27,8 +27,22 @@
 namespace forge {
 
 enum class BodyType {
-    Static, // infinite mass, never moves: floors, walls
-    Dynamic // simulated: gravity, collisions, impulses
+    Static,   // infinite mass, never moves: floors, walls
+    Dynamic,  // simulated: gravity, collisions, impulses
+    Kinematic // scripted motion that PUSHES: platforms, lifts (moveKinematic)
+};
+
+// Full box description (the positional addBox overload covers the common
+// case). friction 0..1; lockRotation keeps a dynamic box axis-aligned
+// (prism cubes, batteries that must stay upright).
+struct BoxDesc {
+    glm::vec3 halfExtents{0.5f};
+    glm::vec3 position{0.0f};
+    BodyType type = BodyType::Static;
+    float restitution = 0.3f;
+    float friction = 0.5f;
+    float density = 1000.0f; // kg/m^3, dynamic only
+    bool lockRotation = false;
 };
 
 // Opaque body handle (index + generation packed inside, so stale handles
@@ -50,6 +64,14 @@ public:
     // Box collider. halfExtents in meters; restitution 0 = clay, 1 = superball.
     BodyId addBox(const glm::vec3& halfExtents, const glm::vec3& position, BodyType type,
                   float restitution = 0.3f);
+    BodyId addBox(const BoxDesc& desc);
+
+    // Kinematic platforms (closes the ADR-020 gap): request a position; the
+    // body SWEEPS there over the next simulated ticks with a real velocity,
+    // so riders are carried and obstacles pushed instead of tunnelled.
+    // Call every frame with the animated target. No-op for other body types.
+    void moveKinematic(BodyId id, const glm::vec3& targetPosition);
+    [[nodiscard]] BodyType bodyType(BodyId id) const;
 
     // Advance the simulation by a frame's worth of real time. Internally
     // steps at a fixed 60 Hz; dt is clamped so a debugger pause can't cause
@@ -93,14 +115,21 @@ public:
     void createCharacter(const glm::vec3& position, float radius, float cylinderHalfHeight);
     // Per frame: horizontal velocity (y ignored; gravity/jump handled
     // internally), jump edge, real frame dt. Walks steps up to ~0.35 m.
-    void moveCharacter(const glm::vec3& horizontalVelocity, bool jump, float dtSeconds);
+    // Returns true on the frame a jump actually launched (coyote time lets a
+    // jump fire up to ~0.1 s after walking off a ledge). The character rides
+    // moving ground (kinematic platforms) and takes the one-frame external
+    // velocity set by pushCharacter (conveyors, fans).
+    bool moveCharacter(const glm::vec3& horizontalVelocity, bool jump, float dtSeconds);
+    // Extra velocity applied on the NEXT moveCharacter only (re-push per frame).
+    void pushCharacter(const glm::vec3& velocity);
+    [[nodiscard]] glm::vec3 characterVelocity() const;
     [[nodiscard]] glm::vec3 characterPosition() const; // capsule center
     [[nodiscard]] bool characterGrounded() const;
     // Respawn/checkpoint warp (VAULT week 6): hard-set the capsule center and
     // clear its velocity so the player doesn't inherit fall speed on respawn.
     void setCharacterPosition(const glm::vec3& position);
 
-    // Week 2: DYNAMIC bodies whose bounds overlap an axis-aligned box.
+    // Week 2: DYNAMIC bodies (kinematic platforms excluded) whose bounds overlap an axis-aligned box.
     // The pressure-plate primitive: cheap broadphase query, main thread,
     // no contact-listener threading — polled from Lua each frame.
     [[nodiscard]] std::vector<BodyId> overlapBox(const glm::vec3& center,

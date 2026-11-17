@@ -13,6 +13,8 @@
 
 #pragma once
 
+#include <glm/vec3.hpp>
+
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -41,7 +43,17 @@ public:
 
     // One-shot: decodes (wav/mp3/flac), plays once at its OWN volume, and
     // overlaps with itself if retriggered. The voice is reaped by update().
-    void play(const std::string& path, float volume = 1.0f);
+    // pitch is a playback-rate multiplier (1 = as authored) — small random
+    // offsets keep repeated SFX (steps, impacts) from machine-gunning.
+    void play(const std::string& path, float volume = 1.0f, float pitch = 1.0f);
+
+    // Positional one-shot (upgrade pass): distance-attenuated and stereo-
+    // panned against the listener set by setListener(). Deliberately simple —
+    // no HRTF, no occlusion; rooms and corridors only need "where and how far".
+    void playAt(const std::string& path, const glm::vec3& position, float volume = 1.0f,
+                float pitch = 1.0f);
+    // Listener pose, once per frame: position + the unit vector to its right.
+    void setListener(const glm::vec3& position, const glm::vec3& right);
 
     // Persistent looping voice (ambient / music). Streamed, not decoded into
     // RAM. Returns a handle for later setVolume()/stop(); null handle on

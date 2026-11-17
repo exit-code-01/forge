@@ -627,3 +627,156 @@ delivered -> socket filled in one flow, TOO HEAVY refusal, trust unlock,
 continue-into-R11 from the extended checkpoint ladder. Known minor: socket
 occupancy can flicker once as a crate settles (hysteresis added); a glove
 grab can pin-fight a crate SPARK is carrying (rare, logged as charm debt).
+
+## ADR-029 — Upgrade pass: HDR renderer, kinematic bodies, and the Assembly zone
+
+After ADR-028 the colour law was carried by texture swaps, not light; moving
+platforms could only teleport their riders; and rooms had one directional
+light. This pass closes the first two, adds the lighting seams, and builds the
+Assembly zone that uses them. ENGINE_GAPS.md lists the new seams (week 13).
+RENDERER: the scene renders to an offscreen RGBA16F target. A fullscreen
+composite applies exposure and an ACES tone map to the sRGB swapchain, replacing
+the old in-shader Reinhard. Bloom is a downsample/upsample chain. The UI is
+drawn last, un-tonemapped. Per-draw `emissive` and `tint` land on DrawItem;
+the scene gains up to 16 unshadowed point lights, exponential fog, a hemisphere
+ambient term, and exposure and bloom controls. The directional shadow frustum
+now follows the camera, so every room is shadowed rather than only the area
+near the origin. Known cost: shadow texels swim as the camera moves, because
+texel snapping is not done.
+PHYSICS: `BodyType::Kinematic` and `PhysicsWorld::moveKinematic`. Platforms
+sweep to a target with real velocity and carry riders; this closes the gap
+noted in ADR-020. `BoxDesc` gains friction, density, and lockRotation.
+`overlapBox` ignores kinematic bodies. The character rides moving ground, has
+0.1 s coyote time and 0.12 s jump buffering (host side), and gets
+`pushCharacter` for conveyors. A head bump no longer leaves stale upward
+velocity, which had left the player hanging under door frames.
+HOST: fixed a first-frame crash when no Vulkan renderer exists (a script
+lighting call hit a null renderer), prop-surfing on held crates, a held crate
+wedged behind geometry straining forever (it now drops), a stale body handle
+after a held object is destroyed, and unclamped frame time after a hitch. A
+name-to-entity index replaces the per-call linear scan, and static bodies stop
+re-teleporting when unchanged. Every PNG in assets/textures is addressable by
+stem. Feel work covers head bob, fall-scaled landing dip, sprint FOV, camera
+shake, pitch-varied footsteps, a glow on the grab target, a context-sensitive
+control legend, and HUD stats and toasts. Dev switches: FORGE_DEV (file-drop
+Lua console at build/_cmd.lua), FORGE_AUTOPLAY (skips the title), FORGE_TITLE.
+AUDIO AND FX: `Audio::play` takes a pitch; `Audio::playAt` with `setListener`
+gives distance-attenuated, panned one-shots. Particles carry emissive colour,
+capped at 1500. Log lines flush individually, so a redirected log survives a
+crash.
+SCRIPT API: the forge.* additions are listed in ENGINE_GAPS.md. `game.save` and
+`game.load` persist numbers in settings.ini, which is how the run timer keeps
+a best time.
+GAME: VAULT is the tutorial plus seventeen rooms. Colour is carried by emissive
+glow (texture swaps set a matching glow), and each room has its own point
+lights and fog. Crates make impact sounds, eight hidden data cores are placed,
+and R now also resets the current room's props. R12 is fixed: sprint-jumping
+the chasm could skip it by landing on the drone pad, which now ignores the
+player's weight. The Assembly zone adds R15 The Belt (a conveyor that runs north
+only while a plate is weighed, and carries a crate through a slot the player
+cannot fit through), R16 The Carousel (a kinematic lift over an electrified pit,
+running only while its plate is weighed) and R17 The Reactor (the finale: a
+prism turns the laser 90 degrees onto a receiver, and a battery behind glass
+powers a socket; both open the last door).
+ASSETS: all procedural, from tools/gen_*.py: ten models, seven textures, and
+fifteen sounds. tools/check_assets.py validates them.
+VERIFICATION, stated plainly. Verified by scripted runs through the dev console
+with log assertions: the intended solutions of the three new rooms, the R12
+fix, room reset, and the data cores. The game boots with no script errors and
+no Vulkan validation warnings. NOT verified: hands-on play of the new rooms,
+audio balance, and the R key edge itself. The lamp, strip, barrel, pipe,
+console, and roller models are generated but not placed in any room yet.
+
+## ADR-030 — Asset-pack pass: whole-file models, skeletal animation, and a sky
+
+The owner wants more locations, free third-party packs (Kenney, Quaternius,
+KayKit, Poly Haven; see ASSET_SOURCES.md) and a visible animated character.
+Three gaps blocked that: the importer read only the first mesh of a file and no
+materials, nothing could skin, and the background was a flat clear colour.
+This pass closes all three, in that order. ENGINE_GAPS.md lists what stays open.
+MODELS: `assets::loadModel` imports a whole file. It reads every mesh in the node
+hierarchy with its node transform baked in, and each mesh's material: the
+base-colour texture (an external file, or embedded in a GLB) and the base-colour
+factor. Vertex colours are ignored. `forge::Model` (renderer/Model.hpp) is the
+GPU side: a list of parts, each one mesh, texture and tint. `uploadModel`
+uploads it, and a shared `TextureCache` uploads a pack's common atlas once. The
+host registers every .obj, .gltf and .glb in assets/models by stem, and
+`forge.scene.spawn(..., mesh)` draws all of a model's parts under the entity's
+transform. THE OVERRIDE RULE lives in one place, `appendModelDraws`. Entity tint
+multiplies each part's tint, and entity emissive is added to each part. A part
+with no material of its own (an OBJ without MTL, which is every legacy VAULT
+asset) shows the entity's texture, as before. A part with an authored material
+shows its own texture times its base colour, unless the entity was given a
+named texture (a spawn argument that resolves, or setTexture). A named texture
+overrides every part and drops the part colours, so colour-language swaps still
+work on imported models. Untextured materials draw a new built-in white
+texture (handle 1). Per-model import corrections live in
+assets/models/import.ini: `scale`, `rotate` (for odd up-axes) and `hide`
+(accessory nodes). Every load logs the model's bounds after correction. The
+texture cap went from 64 to 256. A full table now logs once and returns white
+instead of throwing mid-frame, and a model that fails to import is logged and
+skipped.
+IMPORTERS: glTF moved from Assimp to cgltf v1.15 (pinned tag, one TU, the
+ADR-016 rule). Assimp 5.4.3's glTF importer drops STEP interpolation and maps
+joints by node name. cgltf exposes the spec directly: skins by node index,
+normalized and sparse accessors, and embedded images through buffer views.
+Assimp's glTF importer is switched off, and Assimp now reads OBJ (+ MTL) only,
+through the same node walk. The conventions are unchanged: CCW front faces,
+v = 0 at the top (glTF needs no flip, and OBJ keeps FlipUVs), metres and +Y up.
+A mirroring node transform flips the winding back.
+SKELETAL ANIMATION: an animated file (one with any skin or animation) becomes an
+`anim::Skeleton` plus `SkeletalClip`s. The skeleton holds every node in
+parents-first order with its rest TRS, the joints (each a node plus its inverse
+bind matrix), and the import correction as a root matrix. Clips hold per-node
+translation, rotation and scale tracks. LINEAR uses quaternion slerp, STEP
+holds, and CUBICSPLINE is imported as linear through its key values (the
+tangents are dropped). Non-skinned meshes in an animated file become rigid
+parts: one joint on their node, weight 1. So a sword parented to a hand bone,
+or a node-animated door, uses the same path. `anim::Animator` (one per entity)
+loops, scales speed, holds one-shots on their last pose, and cross-fades two
+clips over a set time with a per-node slerp. Interrupting a fade keeps
+whichever layer dominates. Each vertex takes up to 4 influences (JOINTS_0 and
+WEIGHTS_0, renormalized). On the GPU, a skinned mesh has a SECOND vertex stream
+(`SkinVertex`: u16x4 joints and float4 weights), so static meshes keep their
+layout. Palettes go in a host-visible storage buffer per frame in flight (set
+0, binding 2), sized for 2048 matrices, which is 32 characters of 64 joints.
+`DrawItem::jointOffset` selects a draw's slice, pushed as a fourth push vec4
+(112 of the guaranteed 128 bytes). mesh_skinned.vert and shadow_skinned.vert are
+the skinned twins of the static shaders, so animated characters cast posed
+shadows. A draw whose slice does not fit falls back to its bind pose. Entity
+rotation and scale apply through the model matrix as usual. Script:
+`forge.anim.play(entity, clip[, {loop, speed, fade, restart}])`,
+`forge.anim.clips(model)`, and `forge.anim.time(entity)`, which returns the time
+and the duration. A headless smoke (`animDemo`) checks STEP, LINEAR, slerp,
+looping and the cross-fade numerically at every start.
+SKY: a sky pass draws the fullscreen triangle into the HDR target before any
+mesh, with no depth test or write. It draws a procedural gradient (zenith,
+horizon and ground) plus a sun disc and halo on the key light's direction, in
+the key light's colour. An optional equirectangular 8-bit panorama replaces the
+gradient, with seam-safe derivatives. The sky takes the scene's fog as if it
+stood at the far plane, so the horizon and distant geometry meet at one colour.
+The default is the indoor facility sky: dark, cool, below the bloom threshold,
+and a few 8-bit steps darker than the old clear colour. API: `Renderer::setSky`
+and `forge.render.set_sky({zenith, horizon, ground, sun_size, sun_intensity,
+sun_halo, texture, texture_intensity, texture_yaw})`. Each call describes the
+whole sky, and missing fields take the defaults. The sky's parameters ride in
+the frame UBO's tail (ADR-012), which keeps mesh.frag's prefix declaration
+valid. .hdr panoramas were not added: they need STBI_ONLY_HDR and a float
+texture path.
+TEST SUBJECT: KayKit Adventurers "Knight" by Kay Lousberg (CC0), at
+assets/models/knight.glb and recorded in the ASSET_SOURCES.md ledger. A demo
+block in scene.lua (marked DEMO, with two call sites) stands it on the tutorial
+floor in view of the spawn. It idles and cross-fades into a cheer every six
+seconds. It has no collider, so no puzzle changes.
+VERIFICATION, stated plainly. Observed in dev runs: Phase 1 fixtures (a
+synthetic multi-node glTF with factor-only, external-texture, material-less
+and mirrored parts plus a hidden node, and an OBJ with MTL) drew correctly. The
+GLB's embedded texture loads. The texture-table fallback was exercised with a
+temporarily lowered cap. The knight skins, animates, cross-fades (Idle to Cheer
+to Idle, seen in its clip durations), rotates, scales and casts its posed
+shadow. Day-sky, sun and panorama settings render. The animation smoke passes,
+there are no Vulkan validation messages after each phase or after a window
+resize, and the rooms 15-17 sequencer passes 48 of 48. NOT verified: STEP and
+CUBICSPLINE on a real file (the knight is LINEAR only; STEP is covered by the
+smoke), multiple skins in one file, Z-up or centimetre packs, and the sun disc
+in the default indoor view, where it sits behind the player's start.

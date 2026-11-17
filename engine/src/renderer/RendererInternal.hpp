@@ -15,8 +15,10 @@ class Renderer;
 
 namespace forge::internal {
 
-// Implemented by EditorUi: record UI draw commands into the main pass,
-// after all scene draws, while dynamic rendering is active.
+// Implemented by EditorUi: record UI draw commands into the renderer's final
+// (composite) pass — color = the swapchain image, NO depth attachment — after
+// the tone-mapped scene has been written, while dynamic rendering is active.
+// UI colors therefore land on screen exactly as authored (never tone-mapped).
 struct UiRenderHook {
     virtual ~UiRenderHook() = default;
     virtual void record(VkCommandBuffer cmd) = 0;
@@ -30,7 +32,9 @@ struct RendererVkInfo {
     VkQueue graphicsQueue = VK_NULL_HANDLE;
     uint32_t graphicsFamily = 0;
     VkFormat colorFormat = VK_FORMAT_UNDEFINED; // swapchain format
-    VkFormat depthFormat = VK_FORMAT_UNDEFINED; // main pass depth attachment
+    // Formats of the pass the UI hook records into (the composite pass).
+    // depthFormat is VK_FORMAT_UNDEFINED: that pass has no depth attachment.
+    VkFormat depthFormat = VK_FORMAT_UNDEFINED;
     uint32_t imageCount = 0;
 };
 

@@ -7,6 +7,13 @@ forge_embed_spirv(${CMAKE_CURRENT_BINARY_DIR}/generated/forge_gen/MeshShaders.hp
     kMeshVert ${CMAKE_CURRENT_SOURCE_DIR}/shaders/mesh.vert.spv
     kMeshFrag ${CMAKE_CURRENT_SOURCE_DIR}/shaders/mesh.frag.spv
     kShadowVert ${CMAKE_CURRENT_SOURCE_DIR}/shaders/shadow.vert.spv
+    kMeshSkinnedVert ${CMAKE_CURRENT_SOURCE_DIR}/shaders/mesh_skinned.vert.spv
+    kShadowSkinnedVert ${CMAKE_CURRENT_SOURCE_DIR}/shaders/shadow_skinned.vert.spv
+    kFullscreenVert ${CMAKE_CURRENT_SOURCE_DIR}/shaders/fullscreen.vert.spv
+    kBloomDownFrag ${CMAKE_CURRENT_SOURCE_DIR}/shaders/bloom_down.frag.spv
+    kBloomUpFrag ${CMAKE_CURRENT_SOURCE_DIR}/shaders/bloom_up.frag.spv
+    kCompositeFrag ${CMAKE_CURRENT_SOURCE_DIR}/shaders/composite.frag.spv
+    kSkyFrag ${CMAKE_CURRENT_SOURCE_DIR}/shaders/sky.frag.spv
 )
 
 add_library(forge_engine STATIC
@@ -16,6 +23,8 @@ add_library(forge_engine STATIC
     src/physics/PhysicsWorld.cpp
     src/assets/MeshLoader.cpp
     src/assets/ImageLoader.cpp
+    src/assets/GltfLoader.cpp
+    src/assets/ModelImport.cpp
     src/scripting/ScriptEngine.cpp
     src/ui/EditorUi.cpp
     src/audio/Audio.cpp
@@ -25,6 +34,8 @@ add_library(forge_engine STATIC
     src/renderer/VulkanBuffer.cpp
     src/renderer/VulkanTexture.cpp
     src/renderer/Renderer.cpp
+    src/renderer/Model.cpp
+    src/anim/Animator.cpp
 )
 add_library(forge::engine ALIAS forge_engine)  # consumers use the namespaced name
 
@@ -54,6 +65,7 @@ target_link_libraries(forge_engine
         Jolt            # physics backend; confined to src/physics (ADR-015)
         assimp          # mesh import; confined to src/assets (ADR-016)
         stb             # image import; confined to src/assets (ADR-016)
+        cgltf           # glTF/GLB import; confined to src/assets (ADR-030)
         lua_static      # scripting VM; confined to src/scripting (ADR-018)
         sol2            # C++ <-> Lua binding layer; same TU
         imgui_static    # UI lifecycle/backends; confined to src/ui (ADR-019)
@@ -73,6 +85,20 @@ if(FORGE_GLSLC)
                 -o ${CMAKE_CURRENT_SOURCE_DIR}/shaders/mesh.frag.spv
         COMMAND ${FORGE_GLSLC} -O ${CMAKE_CURRENT_SOURCE_DIR}/shaders/shadow.vert
                 -o ${CMAKE_CURRENT_SOURCE_DIR}/shaders/shadow.vert.spv
+        COMMAND ${FORGE_GLSLC} -O ${CMAKE_CURRENT_SOURCE_DIR}/shaders/mesh_skinned.vert
+                -o ${CMAKE_CURRENT_SOURCE_DIR}/shaders/mesh_skinned.vert.spv
+        COMMAND ${FORGE_GLSLC} -O ${CMAKE_CURRENT_SOURCE_DIR}/shaders/shadow_skinned.vert
+                -o ${CMAKE_CURRENT_SOURCE_DIR}/shaders/shadow_skinned.vert.spv
+        COMMAND ${FORGE_GLSLC} -O ${CMAKE_CURRENT_SOURCE_DIR}/shaders/fullscreen.vert
+                -o ${CMAKE_CURRENT_SOURCE_DIR}/shaders/fullscreen.vert.spv
+        COMMAND ${FORGE_GLSLC} -O ${CMAKE_CURRENT_SOURCE_DIR}/shaders/bloom_down.frag
+                -o ${CMAKE_CURRENT_SOURCE_DIR}/shaders/bloom_down.frag.spv
+        COMMAND ${FORGE_GLSLC} -O ${CMAKE_CURRENT_SOURCE_DIR}/shaders/bloom_up.frag
+                -o ${CMAKE_CURRENT_SOURCE_DIR}/shaders/bloom_up.frag.spv
+        COMMAND ${FORGE_GLSLC} -O ${CMAKE_CURRENT_SOURCE_DIR}/shaders/composite.frag
+                -o ${CMAKE_CURRENT_SOURCE_DIR}/shaders/composite.frag.spv
+        COMMAND ${FORGE_GLSLC} -O ${CMAKE_CURRENT_SOURCE_DIR}/shaders/sky.frag
+                -o ${CMAKE_CURRENT_SOURCE_DIR}/shaders/sky.frag.spv
         COMMENT "Recompiling GLSL -> SPIR-V into the source tree (commit the result)"
     )
 endif()

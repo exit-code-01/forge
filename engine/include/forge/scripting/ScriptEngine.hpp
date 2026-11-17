@@ -21,8 +21,10 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <string>
 #include <utility>
+#include <vector>
 
 namespace forge {
 
@@ -34,6 +36,40 @@ struct BodyId;
 namespace fx {
 class ParticleEmitter;
 }
+
+// Optional trailing table on forge.scene.spawn (upgrade pass): the physical
+// character of a spawned box. Defaults reproduce the pre-upgrade behaviour.
+struct SpawnOptions {
+    bool kinematic = false;    // scripted mover that pushes riders (platforms)
+    bool lockRotation = false; // dynamic but always axis-aligned (prisms)
+    float friction = 0.5f;
+    float density = 1000.0f;
+    float restitution = 0.4f;
+};
+
+// Optional table on forge.anim.play (ADR-030): {loop=, speed=, fade=,
+// restart=}. Replaying the clip that is already playing only updates
+// loop/speed unless restart=true.
+struct AnimPlayOptions {
+    bool loop = true;
+    float speed = 1.0f;
+    float fade = 0.2f; // seconds of cross-fade (0 = cut)
+    bool restart = false;
+};
+
+// forge.render.set_sky(opts) (ADR-030). Every call describes the WHOLE sky:
+// fields left out (nullopt) take the renderer's indoor defaults, and
+// set_sky() with no table restores the default sky. `texture` names a
+// texture in assets/textures (equirectangular); "" = the procedural gradient.
+struct SkyOptions {
+    std::optional<glm::vec3> zenith, horizon, ground; // linear HDR rgb
+    std::optional<float> sunSize;      // degrees (angular radius); 0 hides the disc
+    std::optional<float> sunIntensity; // x key-light colour
+    std::optional<float> sunHalo;
+    std::string texture;
+    std::optional<float> textureIntensity;
+    std::optional<float> textureYaw; // degrees
+};
 
 class ScriptEngine {
 public:
@@ -82,8 +118,43 @@ public:
     // means the unit cube, and unknown names fall back to it host-side.
     std::function<void(const std::string& name, glm::vec3 position, glm::vec3 scale,
                        glm::vec3 halfExtents, const std::string& texture, bool dynamic,
-                       const std::string& mesh)>
+                       const std::string& mesh, const SpawnOptions& options)>
         onSpawnEntity;
+
+    // ---- Upgrade pass seams (ADR-029) ------------------------------------
+    // Emissive + tint: the REAL carrier of the colour language now that the
+    // renderer has HDR + bloom. emissive is linear HDR radiance (> 1 blooms).
+    std::function<void(const std::string& name, glm::vec3 emissive)> onSetEntityEmissive;
+    std::function<void(const std::string& name, glm::vec3 tint)> onSetEntityTint;
+    std::function<bool(const std::string& name)> onEntityExists;
+    // Body <-> name: raycasts return body ids; puzzles think in names. Also
+    // retires the fragile "overlap a box and hope it is unambiguous" lookup.
+    std::function<std::string(uint32_t body)> onBodyName; // "" if unknown
+    std::function<uint32_t(const std::string& name)> onBodyId; // 0 if none
+    // Player seams: conveyors push, hazards read velocity, SPARK needs to
+    // know what the glove holds (and can make it let go).
+    std::function<void(glm::vec3 velocity)> onPushPlayer;
+    std::function<glm::vec3()> onPlayerVelocity;
+    std::function<bool()> onPlayerGrounded;
+    std::function<std::string()> onPlayerHolding; // entity name or ""
+    std::function<void()> onPlayerDrop;
+    // Local lights by id (the host picks the nearest N each frame), fog,
+    // exposure, bloom — the per-room mood kit.
+    std::function<void(const std::string& id, glm::vec3 position, glm::vec3 color, float radius)>
+        onSetLight;
+    std::function<void(const std::string& id)> onClearLight;
+    std::function<void(glm::vec3 color, float density)> onSetFog;
+    std::function<void(float exposure)> onSetExposure;
+    std::function<void(float intensity)> onSetBloom;
+    std::function<void(const SkyOptions& sky)> onSetSky; // ADR-030
+    // HUD: transient toasts ("DATA CORE 3/8") and named stat lines the host
+    // shows on the pause/win screens. Camera shake for impacts.
+    std::function<void(const std::string& text, float seconds)> onToast;
+    std::function<void(const std::string& key, const std::string& value)> onSetStat;
+    std::function<void(float amount)> onCameraShake;
+    // Generic persistence (best time, cores): numbers by key in settings.ini.
+    std::function<void(const std::string& key, double value)> onSaveValue;
+    std::function<double(const std::string& key)> onLoadValue; // 0 if absent
     std::function<glm::vec3()> onPlayerPosition;
     // Respawn/checkpoint (week 6): scripts warp the player; the host owns the
     // character controller. Pairs with onPlayerPosition.
@@ -117,6 +188,15 @@ public:
     // blooms with value = charge01; mode "command" is the blue F-command
     // acknowledgment with value = intensity. The host owns the pixels.
     std::function<void(const std::string& mode, float value)> onSetReticle;
+    // Skeletal animation (ADR-030): forge.anim.play(entity, clip[, opts]) ->
+    // bool (false: no animator or unknown clip), forge.anim.clips(model) ->
+    // list of clip names, forge.anim.time(entity) -> seconds, duration (nil
+    // when the entity plays nothing).
+    std::function<bool(const std::string& entity, const std::string& clip,
+                       const AnimPlayOptions& options)>
+        onAnimPlay;
+    std::function<std::vector<std::string>(const std::string& model)> onAnimClips;
+    std::function<std::optional<std::pair<float, float>>(const std::string& entity)> onAnimTime;
     // forge.scene.setPosition/getPosition(name), forge.player.position(),
     // forge.render.set_light(color, dir), forge.hud.set_hint(text).
     void bindScene();

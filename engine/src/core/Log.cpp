@@ -71,6 +71,7 @@ void write(Level level, std::string_view message) {
                  static_cast<int>(h.count() % 24), static_cast<int>(m.count()),
                  static_cast<int>(s.count()), static_cast<int>(ms.count()), style.label,
                  color ? "\x1b[0m" : "", static_cast<int>(message.size()), message.data());
+    std::fflush(out);
 }
 
 } // namespace forge::log

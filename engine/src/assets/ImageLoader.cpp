@@ -54,4 +54,24 @@ ImageData loadImage(const std::string& path) {
     return out;
 }
 
+ImageData loadImageFromMemory(const uint8_t* bytes, size_t size, const std::string& name) {
+    int width = 0;
+    int height = 0;
+    int sourceChannels = 0;
+    stbi_uc* pixels = stbi_load_from_memory(bytes, static_cast<int>(size), &width, &height,
+                                            &sourceChannels, STBI_rgb_alpha);
+    if (pixels == nullptr) {
+        throw std::runtime_error("image decode failed: " + name + " (" + stbi_failure_reason() +
+                                 ")");
+    }
+    ImageData out;
+    out.width = static_cast<uint32_t>(width);
+    out.height = static_cast<uint32_t>(height);
+    out.rgba.assign(pixels, pixels + static_cast<size_t>(width) * height * 4);
+    stbi_image_free(pixels);
+    FORGE_INFO("image decoded: {} ({}x{}, {} source channels)", name, width, height,
+               sourceChannels);
+    return out;
+}
+
 } // namespace forge::assets

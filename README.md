@@ -47,7 +47,7 @@ sudo apt install xorg-dev libwayland-dev libxkbcommon-dev wayland-protocols
 
 ## Status
 
-VAULT (the sample game) is playable start to finish: tutorial + **fourteen**
+VAULT (the sample game) is playable start to finish: tutorial + **seventeen**
 puzzle rooms, menus, settings, and save/continue. Weeks 1–11 built the
 plates/lasers/glass vocabulary, the parkable companion drone, the art and
 character pass (rigid-rig SPARK + first-person glove, ADR-027). Week 12
@@ -65,6 +65,14 @@ Engine seams that landed on the way: `forge.input.down`,
 `forge.player.look/charge/set_throw_speed` (release-edge throws),
 `forge.physics.set_velocity`, `forge.hud.set_reticle`, and live physics
 positions from `forge.scene.getPosition` for dynamic bodies.
+Week 13 (ADR-029) is the upgrade pass. The Assembly zone adds R15 The Belt,
+R16 The Carousel, and R17 The Reactor, the new finale. The renderer now draws
+to an HDR target with an ACES tone map and bloom, with emissive materials, up
+to 16 point lights, and distance fog, and the shadows follow the camera so
+every room is lit. Physics gains kinematic bodies, so the Carousel's lift
+carries the player. The build has been checked by scripted runs through the
+dev console and a clean boot; hands-on play of the new rooms has not happened
+yet.
 
 ## Vulkan SDK
 
