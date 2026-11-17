@@ -992,3 +992,77 @@ clearance. NOT verified: a crate THROWN at a ramp still tumbles down it
 flat faces toward the sun show a strong specular glare from mesh.frag's fixed
 roughness (ENGINE_GAPS), more visible now that the tops are pale rock.
 
+## ADR-033 — Cascaded shadows, script-set ambient, per-entity roughness
+
+The Surface needs shadows past 16 m, sky light in its shade, and matte rock.
+Three renderer changes, all defaults reproducing the old look indoors.
+
+- **Cascaded shadow maps.** One D32 image with 3 array layers of 2048²
+  (48 MB, was one 2048² map covering +-16 m around the camera). Splits by the
+  practical scheme (lambda 0.6) over the camera frustum to 72 m: about 10 /
+  24 / 72 m. Each cascade is the bounding SPHERE of its frustum slice (radius
+  depends only on fov, aspect and splits, quantized up to 1/8 of its power of
+  two so the sprint FOV change re-grids rarely), centred in a light space that
+  only rotates with the light, its x/y snapped to whole texels: texels no
+  longer swim as the camera moves or turns. Texels: ~1.2 cm in cascade 0
+  (finer than the old 1.6 cm), ~2.9 cm, ~8.6 cm. Casters up to 120 m toward
+  the light beyond a sphere still land in its map. mesh.frag picks the finest
+  cascade whose map holds the point (map-based, so cascade 0 serves most of a
+  room), cross-fades into the next over the outer 6 % of the map, adds a
+  one-texel normal-offset bias scaled per cascade (the rasterizer's slope
+  bias already scales with the texel), and fades to lit from 60 to 72 m (or
+  before the far plane if that is nearer). The shadow pass draws each caster
+  once per cascade with `cascade view-proj * model` in the push constant, so
+  the shadow vertex shaders need no cascade index. Static casters are culled
+  by a model-space bounding sphere computed at upload: first against the
+  light-space box of the camera frustum out to the shadow distance (a shadow
+  cast from outside it lands nowhere visible), then per cascade against its
+  box. Skinned casters are never culled (their pose can leave the bind-pose
+  bounds) and are drawn last, so each cascade switches pipeline once. The
+  other location, 400 m away, now costs no shadow draws at all. Facing-away
+  fragments skip the cascade lookups.
+- **Ambient.** `Renderer::setAmbient(sky, ground, weight)` / `resetAmbient()`
+  and `forge.render.set_ambient([sky, ground[, weight]])`. The default stays
+  the key-derived hemisphere term; weight blends from it (0) to the given
+  colours (1), so a location cross-fade calls it with its blend factor and
+  leaving restores the default exactly. surface.lua does that in applyMood.
+- **Roughness/metallic per entity.** `DrawItem::roughness/metallic` (defaults
+  0.35 / 0.15, the old mesh.frag constants) ride in the w channels of the
+  existing emissive/tint push constants: no layout change. Lua:
+  `forge.scene.setRoughness(name, r)`, `forge.scene.setMetallic(name, m)`,
+  spawn options `roughness =`, `metallic =`. A `forge.render.set_sun` was not
+  added: `set_light(color, dir)` already is one.
+- **Use on the Surface.** applyMood blends `set_ambient(sky (0.46, 0.52,
+  0.62), ground (0.32, 0.29, 0.24), k)` with the sky/fog/key; k = 0 (the
+  facility, also on reset) is exactly the default. Terrain (concrete blocks,
+  the rock/stone/cliff/terrain models) is roughness 0.9, and its emissive
+  shade fill (SHADE_FILL, ROCKFILL, the ground/ramp fills) is gone. Tinted
+  built shells on metal/panel textures keep half the old fill (STRUCT_FILL
+  0.08): their textures are dark, and without it the tower read black
+  against the sky.
+
+Why not an atlas: array layers clamp per layer, so PCF never bleeds between
+cascades. Why spheres, not tight boxes: tight boxes change size every frame
+and shimmer; the price is resolution (wide FOV puts the sphere's centre on the
+slice's far plane). Not done: per-material roughness from glTF, sky occlusion
+(a face under an overhang gets the full sky ambient), thin-caster aliasing in
+the far cascade (an unpowered cable's shadow reads as a dashed line at 40 m).
+
+VERIFICATION, as run on the owner machine (RTX 3050 Laptop, debug build,
+validation on): clean build, no new warnings; `test_all` 51/51,
+`test_surface` 126/126, `test_mesh` 16/16, no validation messages; the three
+.spv recompiled with glslc and checked byte-equal to a fresh compile.
+Frame time, test_surface's PERF lines, HEAD vs this change built back to
+back: facility 42.5 -> 39.0 ms, Surface 42.6 -> 43.3 ms (+1.5 %; another
+agent was using the machine, so +-2 ms is noise). A first version without
+the frustum cull, with glm math per caster, measured Surface +12 %; the cost
+is CPU draw recording under the validation layer (fence wait 0.1 ms: not
+GPU-bound), hence the cull and the raw-float caster math. Seen in
+screenshots (build/_shots/c1_{before,after}_{arrival,valley,room}.png):
+shadows of trees, walls and the tower to ~60 m across the valley; a cascade
+tint debug view (not committed) showed cascade 0 covering a whole facility
+room and the near Surface, 1 and 2 beyond, no seam visible in the normal
+render; no acne or peter-panning seen on the terrain; the R5 room differs
+from before by 1.6/255 mean. NOT verified: shimmer while moving (stills
+only; snapping is by construction), the sprint FOV re-grid, a sun near
+vertical, keyboard play on the Surface.

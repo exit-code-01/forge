@@ -254,6 +254,12 @@ void ScriptEngine::bindScene() {
             options.density = opts->get_or("density", options.density);
             options.restitution = opts->get_or("restitution", options.restitution);
             options.yawDeg = opts->get_or("yaw", options.yawDeg);
+            if (const sol::optional<float> r = (*opts)["roughness"]) { // ADR-033
+                options.roughness = *r;
+            }
+            if (const sol::optional<float> m = (*opts)["metallic"]) {
+                options.metallic = *m;
+            }
             const std::string collider = opts->get_or("collider", std::string("box"));
             options.meshCollider = collider == "mesh";
             if (collider != "box" && collider != "mesh") {
@@ -272,6 +278,18 @@ void ScriptEngine::bindScene() {
     sceneTable.set_function("setTint", [this](const std::string& name, const glm::vec3& t) {
         if (onSetEntityTint) {
             onSetEntityTint(name, t);
+        }
+    });
+    // setRoughness(name, r) / setMetallic(name, m), 0..1 (ADR-033): the
+    // whole entity's surface response; defaults 0.35 / 0.15.
+    sceneTable.set_function("setRoughness", [this](const std::string& name, float roughness) {
+        if (onSetEntityMaterial) {
+            onSetEntityMaterial(name, roughness, std::nullopt);
+        }
+    });
+    sceneTable.set_function("setMetallic", [this](const std::string& name, float metallic) {
+        if (onSetEntityMaterial) {
+            onSetEntityMaterial(name, std::nullopt, metallic);
         }
     });
     sceneTable.set_function("exists", [this](const std::string& name) {
@@ -412,6 +430,22 @@ void ScriptEngine::bindScene() {
     renderTable.set_function("set_bloom", [this](float intensity) {
         if (onSetBloom) {
             onSetBloom(intensity);
+        }
+    });
+    // set_ambient([sky, ground[, weight]]) (ADR-033): hemisphere ambient,
+    // linear HDR (sky = normals up, ground = normals down; ground defaults
+    // to sky). weight 0..1 blends from the renderer's key-derived default
+    // (0) to these colours (1, the default) for cross-fades. No arguments
+    // restores the default.
+    renderTable.set_function("set_ambient", [this](sol::optional<glm::vec3> sky,
+                                                   sol::optional<glm::vec3> ground,
+                                                   sol::optional<float> weight) {
+        if (onSetAmbient) {
+            if (sky) {
+                onSetAmbient(*sky, ground.value_or(*sky), weight.value_or(1.0f));
+            } else {
+                onSetAmbient(glm::vec3(0.0f), glm::vec3(0.0f), 0.0f);
+            }
         }
     });
     // set_view_distance(m): the camera far plane (outdoor locations, ADR-031).

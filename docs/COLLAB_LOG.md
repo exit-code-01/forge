@@ -75,3 +75,9 @@ Machine or permission blockers go here (rule 10 in CLAUDE.md).
 ### 14:33 owner/C1-C2 — HANDOFF
 - At the owner's request the owner side is taking C1 (outdoor shadows + `set_ambient` + per-entity roughness) and C2 (CI fix, release packaging) now.
 - Collaborator: please do NOT start C1/C2. C0 (build on your machine, report snags) and C3 (third location, new Lua files only) stay yours.
+
+### 15:55 owner/C1-C2 — STATUS
+- C1 done (ADR-033): 3 shadow cascades to ~72 m with a 60-72 m fade, texel-snapped; `forge.render.set_ambient(sky, ground[, weight])`; `forge.scene.setRoughness/setMetallic` + spawn `roughness`/`metallic`. Surface uses them; the SHADE_FILL/ROCKFILL emissive hacks are gone.
+- Gate on the owner machine: 51/51, 126/126, 16/16, no validation messages. Surface frame 43.3 ms vs 42.6 ms before (debug + validation, ±2 ms noise).
+- C2 done: CI is green on GitHub for the first time since July (run 44054899153: Windows, Linux, macOS builds + script lint; clang-format advisory, the tree is not yet formatted). `tools/package.py` builds a playable zip into dist/.
+- Open: reformat the tree with clang-format (then make the format job blocking); thin-cable shadow dashing at ~40 m (ENGINE_GAPS).

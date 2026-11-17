@@ -85,6 +85,14 @@ struct DrawItem {
     // without a skin stream — draws the plain, unskinned path.
     static constexpr uint32_t kNoJoints = 0xFFFFFFFFu;
     uint32_t jointOffset = kNoJoints;
+    // Surface response (ADR-033), per draw. The defaults are the constants
+    // mesh.frag used before, so untouched draws look exactly as they did.
+    // roughness: 0 = mirror-like highlight .. 1 = matte (rock, soil);
+    // metallic: 0 = dielectric .. 1 = metal (tints the reflection, no diffuse).
+    static constexpr float kDefaultRoughness = 0.35f;
+    static constexpr float kDefaultMetallic = 0.15f;
+    float roughness = kDefaultRoughness;
+    float metallic = kDefaultMetallic;
 };
 
 // A local omni light: inverse-square-ish falloff windowed to zero at `radius`.
@@ -177,14 +185,24 @@ public:
     // The sky behind everything (ADR-030); persists until changed. Pass a
     // default-constructed Sky to restore the indoor default.
     void setSky(const Sky& sky);
+    // Hemisphere ambient (ADR-033): the light a face gets from the sky above
+    // (normal up) and the ground bounce below (normal down), linear HDR,
+    // multiplied by albedo. The DEFAULT is derived from the key light (a
+    // small floor plus ~3 % of setLighting's colour) — right for the
+    // facility's rooms, near-black outdoors. `weight` blends from that
+    // default (0) to exactly these colours (1), for location cross-fades.
+    // Persists until changed; resetAmbient() restores the default.
+    void setAmbient(glm::vec3 sky, glm::vec3 ground, float weight = 1.0f);
+    void resetAmbient();
 
     // Joint palette capacity per frame (ADR-030): 2048 matrices = 32
     // characters of 64 joints. Extra matrices are dropped; a draw whose slice
     // does not fit falls back to its bind pose.
     static constexpr uint32_t kMaxJoints = 2048;
 
-    // Renders and presents one frame: shadow pass over all items, then the
-    // lit scene (then the UI hook, if set). Safe to call when minimized
+    // Renders and presents one frame: shadow pass (3 cascades, each drawing
+    // the items whose bounds reach it, ADR-033), then the lit scene (then
+    // the UI hook, if set). Safe to call when minimized
     // (no-op) or with an empty span. `joints` is this frame's skinning
     // palette (model-space matrices) that DrawItem::jointOffset indexes.
     void drawFrame(const Camera& camera, std::span<const DrawItem> items,

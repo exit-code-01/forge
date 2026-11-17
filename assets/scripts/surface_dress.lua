@@ -25,7 +25,14 @@ function SURFACE_DRESS(K)
     -- the ramps are 23-27 degrees: at the default 0.5 a dropped crate or cell
     -- slides to the bottom, where it used to rest on a step
     local GRIP = { srf_terr_ramps = 1.8 }
-    local function put(model, x, y, z, yaw, s, col, sy, fill)
+    -- rock, stone and terrain are matte (ADR-033 roughness): at the default
+    -- 0.35 their sun-facing faces glared white
+    local function rough(model)
+        if model:find("rock") or model:find("stone") or model:find("cliff") or model:find("terr_") then
+            return 0.9
+        end
+    end
+    local function put(model, x, y, z, yaw, s, col, sy)
         if not forge.scene.has_model(model) then
             missing[model] = (missing[model] or 0) + 1
             return
@@ -36,12 +43,13 @@ function SURFACE_DRESS(K)
             -- the visual. Named "Dress Col" so the E prompt's line of sight
             -- (missions.lua) treats it as world geometry.
             forge.scene.spawn("Dress Col " .. n, vec3(x, y, z), vec3(s, sy or s, s), vec3(0, 0, 0), "", false,
-                              model, { collider = "mesh", yaw = yaw, friction = GRIP[model] or 0.5 })
-            if fill then forge.scene.setEmissive("Dress Col " .. n, fill) end
+                              model, { collider = "mesh", yaw = yaw, friction = GRIP[model] or 0.5,
+                                       roughness = rough(model) })
             return
         end
         local name = "Dress " .. n
-        forge.scene.spawn(name, vec3(x, y, z), vec3(s, sy or s, s), vec3(0, 0, 0), "", false, model)
+        forge.scene.spawn(name, vec3(x, y, z), vec3(s, sy or s, s), vec3(0, 0, 0), "", false, model,
+                          rough(model) and { roughness = rough(model) } or nil)
         if yaw ~= 0 then forge.scene.setRotation(name, vec3(0, yaw, 0)) end
         if col then
             n = n + 1
@@ -55,18 +63,19 @@ function SURFACE_DRESS(K)
     -- valley stops reading as slabs. Authored in WORLD space around
     -- (400, 0, 0): spawn there, scale 1, no yaw. Mesh colliders (ADR-032): the boxes
     -- stay behind them as backing, and below 2.7 m the skins keep within 0.21 m of them.
+    -- No emissive shade fill any more: the Surface's sky ambient (ADR-033)
+    -- lights their shadowed faces.
     local skinned = forge.scene.has_model("srf_terr_cliffs")
-    local ROCKFILL = vec3(0.115, 0.103, 0.091) -- shade fill, as surface.lua
     for _, m in ipairs({ "srf_terr_cliffs", "srf_terr_ravine", "srf_terr_outcrops" }) do
-        put(m, 400, 0, 0, 0, 1, "mesh", nil, ROCKFILL)
+        put(m, 400, 0, 0, 0, 1, "mesh")
     end
     -- the valley floor (tools/gen_ground.py): flat at y = 0 where things
     -- stand, scree banks at the cliff feet, dirt paths between the landmarks.
     -- surface.lua sinks its ground boxes under it. And the two stair runs as
     -- walkable ramps (tools/gen_ramps.py) laid over the step boxes.
-    put("srf_terr_ground", 400, 0, 0, 0, 1, "mesh", nil, vec3(0.05, 0.062, 0.035))
-    put("srf_terr_ramps", 400, 0, 0, 0, 1, "mesh", nil, vec3(0.09, 0.076, 0.058))
-    put("srf_terr_tops", 400, 0, 0, 0, 1, "mesh") -- platform tops: sunlit, no shade fill
+    put("srf_terr_ground", 400, 0, 0, 0, 1, "mesh")
+    put("srf_terr_ramps", 400, 0, 0, 0, 1, "mesh")
+    put("srf_terr_tops", 400, 0, 0, 0, 1, "mesh")
 
     -- ---- cliff faces: one 6 m wall tile per cell on the innermost tier, a
     -- hand's width proud of the box face (the skins are the colliders now; boxes are backing).

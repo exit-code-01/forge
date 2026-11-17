@@ -53,6 +53,10 @@ local SUR = { -- afternoon valley: sun in the south-east behind the head-house,
     fog = vec3(0.48, 0.60, 0.80), fogD = 0.0026, exposure = 0.80, bloom = 0.30,
     key = vec3(5.4, 5.0, 4.3), dir = vec3(0.63, 0.57, 0.53), far = 320,
     amb = 0.06, music = 0.14, -- the HVAC bed drops to a far-off wind-like hush
+    -- hemisphere ambient (ADR-033): blue sky light from above, a warm bounce
+    -- off the sunlit valley floor from below. The facility keeps the
+    -- renderer's key-derived default (weight 0 in applyMood).
+    ambSky = vec3(0.46, 0.52, 0.62), ambGround = vec3(0.32, 0.29, 0.24),
 }
 local function lerp(a, b, t) return a + (b - a) * t end
 local function lv(a, b, t) return vec3(lerp(a.x, b.x, t), lerp(a.y, b.y, t), lerp(a.z, b.z, t)) end
@@ -68,6 +72,7 @@ local function applyMood(t, keyFrom)
     forge.render.set_exposure(lerp(FAC.exposure, SUR.exposure, k))
     forge.render.set_bloom(lerp(FAC.bloom, SUR.bloom, k))
     forge.render.set_light(lv(keyFrom, SUR.key, k), lv(FAC.dir, SUR.dir, k))
+    forge.render.set_ambient(SUR.ambSky, SUR.ambGround, k) -- k = 0: the facility default
     forge.render.set_view_distance(t > 0 and SUR.far or FAC.far)
     if HUM.amb then forge.audio.set_volume(HUM.amb, lerp(FAC.amb, SUR.amb, k)) end
     if HUM.music then forge.audio.set_volume(HUM.music, lerp(FAC.music, SUR.music, k)) end
@@ -172,16 +177,22 @@ end
 
 -- ---- Build (once per process; geometry never re-spawns on reload) -------
 local count = 0
-local SHADE_FILL = 0.16
+local MATTE = 0.9 -- terrain roughness (ADR-033): rock and soil, no sun glare
+local STRUCT_FILL = 0.08
 local function blk(name, x0, x1, y0, y1, z0, z1, tex, tint, solid, mesh)
     local pos = vec3((x0 + x1) * 0.5, (y0 + y1) * 0.5, (z0 + z1) * 0.5)
     K.box(name, pos, vec3(x1 - x0, y1 - y0, z1 - z0), tex or "concrete", solid ~= false, false, mesh)
     if tint then
         forge.scene.setTint(name, tint)
-        -- shade fill: the renderer's ambient is about 1/28 of the sun, so
-        -- outdoor faces in shadow go near-black. A little self-light on the
-        -- tinted terrain stands in for sky light (ENGINE_GAPS: ambient API).
-        forge.scene.setEmissive(name, tint * SHADE_FILL)
+        if (tex or "concrete") == "concrete" then
+            -- terrain: matte, and its shade comes from the Surface's sky
+            -- ambient (applyMood) - the old emissive "shade fill" is gone
+            forge.scene.setRoughness(name, MATTE)
+        else
+            -- built shells on dark metal/panel textures keep half the old
+            -- fill: without it the tower reads black against the sky
+            forge.scene.setEmissive(name, tint * STRUCT_FILL)
+        end
     end
     count = count + 1
 end

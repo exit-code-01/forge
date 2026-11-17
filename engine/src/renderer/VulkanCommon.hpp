@@ -16,7 +16,8 @@
 namespace forge::vkutil {
 
 // Sync2 image-layout transition — the one barrier shape the renderer needs.
-// Mip-aware because mip generation transitions levels individually.
+// Mip-aware because mip generation transitions levels individually. Covers
+// every array layer (the cascaded shadow map is a layered image, ADR-033).
 inline void transitionImage(VkCommandBuffer cmd, VkImage image, VkImageAspectFlags aspect,
                             uint32_t baseMip, uint32_t mipCount, VkImageLayout from,
                             VkImageLayout to, VkPipelineStageFlags2 srcStage,
@@ -33,7 +34,7 @@ inline void transitionImage(VkCommandBuffer cmd, VkImage image, VkImageAspectFla
     barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
     barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
     barrier.image = image;
-    barrier.subresourceRange = {aspect, baseMip, mipCount, 0, 1};
+    barrier.subresourceRange = {aspect, baseMip, mipCount, 0, VK_REMAINING_ARRAY_LAYERS};
 
     VkDependencyInfo dep{};
     dep.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;

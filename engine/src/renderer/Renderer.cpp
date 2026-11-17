@@ -19,13 +19,16 @@
 #include "forge_gen/MeshShaders.hpp" // generated from checked-in .spv (ADR-011)
 
 #include <glm/gtc/matrix_transform.hpp>
+#include <glm/gtc/type_ptr.hpp>
 #include <glm/vec4.hpp>
 
 #include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstring>
+#include <limits>
 #include <stdexcept>
+#include <utility>
 #include <vector>
 
 namespace forge {
@@ -36,9 +39,29 @@ namespace {
 // three adds latency, one serializes CPU and GPU.
 constexpr uint32_t kFramesInFlight = 2;
 
-// Directional shadow map resolution (ADR-014). One map, one light, until a
-// real scene demands cascades.
+// Directional shadows (ADR-014, cascaded since ADR-033): one key light, three
+// cascades in the layers of one D32 array image, each kShadowMapSize square.
+// Each cascade is a sphere around its slice of the view frustum (radius
+// depends only on fov/aspect/splits, so the map size in world units never
+// changes as the camera turns) snapped to whole texels in light space (so
+// it never swims as the camera moves).
 constexpr uint32_t kShadowMapSize = 2048;
+constexpr uint32_t kShadowCascades = 3; // must match kCascades in mesh.frag
+// Shadows reach kShadowFar metres (fading out from kShadowFadeStart), or
+// the camera's far plane if that is nearer. The Surface wants >= 60 m.
+constexpr float kShadowFar = 72.0f;
+constexpr float kShadowFadeStart = 60.0f;
+// Practical split scheme: lambda blends logarithmic (1) and uniform (0)
+// splits. 0.6 gives ~10 / 24 / 72 m: cascade 0 texels ~1.2 cm, finer than
+// the old single 32 m map's 1.6 cm, so rooms keep their crisp shadows.
+constexpr float kCascadeSplitLambda = 0.6f;
+// Casters up to this far TOWARD the light beyond a cascade's sphere still
+// land in its map (a 30 m tower under a 35-degree sun is ~55 m up-ray).
+constexpr float kCasterReach = 120.0f;
+// mesh.frag: cross-fade band at a cascade's map edge (fraction of the map),
+// and the normal-offset bias in texels of the cascade sampled.
+constexpr float kCascadeBlendBand = 0.06f;
+constexpr float kShadowNormalOffsetTexels = 1.0f;
 
 // Scene color target: linear, scene-referred HDR. Half-float keeps emissive
 // values far above 1.0 intact for bloom and the tone mapper. (Color
@@ -86,18 +109,25 @@ struct FrameUbo {
     glm::vec4 skyGround;   // rgb
     glm::vec4 skySun;      // rgb: disc radiance, a: cos(angular radius), 2 = no disc
     glm::vec4 skyParams;   // x: panorama on, y: its intensity, z: fog distance, w: halo
+    // Cascade tail (ADR-033): read only by mesh.frag, which declares the
+    // whole block. The shadow pass itself takes its matrix per draw.
+    glm::mat4 cascadeViewProj[kShadowCascades]; // world -> cascade light clip
+    glm::vec4 cascadeTexel; // xyz: world size of one texel per cascade
+    glm::vec4 shadowParams; // x: fade start, y: fade end (m), z: blend band, w: normal offset
 };
-static_assert(sizeof(FrameUbo) == 240 + 32 * Renderer::kMaxPointLights + 144,
+static_assert(sizeof(FrameUbo) ==
+                  240 + 32 * Renderer::kMaxPointLights + 144 + 64 * kShadowCascades + 32,
               "must match the std140 blocks in mesh.frag / sky.frag");
 
 // Per-draw push constants (ADR-012): 112 of the 128 bytes Vulkan guarantees.
 // The static vertex stages read only `model`; mesh.frag reads emissive +
-// tint; the skinned vertex stages (ADR-030) also read skin.x, the first
-// joint of the draw's palette slice.
+// tint (their w channels carry roughness + metallic, ADR-033); the skinned
+// vertex stages (ADR-030) also read skin.x, the first joint of the draw's
+// palette slice. In the shadow pass `model` is cascade view-proj * model.
 struct DrawPush {
     glm::mat4 model;
-    glm::vec4 emissive; // rgb: linear HDR radiance added after lighting
-    glm::vec4 tint;     // rgb: albedo multiplier
+    glm::vec4 emissive; // rgb: linear HDR radiance added after lighting, a: roughness
+    glm::vec4 tint;     // rgb: albedo multiplier, a: metallic
     glm::uvec4 skin;    // x: joint offset (skinned pipelines only)
 };
 static_assert(sizeof(DrawPush) == 112, "must match the push_constant blocks (mesh*.vert/frag)");
@@ -171,7 +201,7 @@ bool formatHasStencil(VkFormat format) {
 // Device-local 2D image + memory (depth buffer, shadow map). Throws on failure.
 void allocateImage(const VulkanDevice& device, uint32_t width, uint32_t height, VkFormat format,
                    VkImageUsageFlags usage, VkImage& outImage, VkDeviceMemory& outMemory,
-                   uint32_t mipLevels = 1) {
+                   uint32_t mipLevels = 1, uint32_t arrayLayers = 1) {
     const VkDevice dev = device.device();
     VkImageCreateInfo imageInfo{};
     imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
@@ -179,7 +209,7 @@ void allocateImage(const VulkanDevice& device, uint32_t width, uint32_t height, 
     imageInfo.format = format;
     imageInfo.extent = {width, height, 1};
     imageInfo.mipLevels = mipLevels;
-    imageInfo.arrayLayers = 1;
+    imageInfo.arrayLayers = arrayLayers;
     imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
     imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
     imageInfo.usage = usage;
@@ -247,6 +277,76 @@ std::vector<uint8_t> makeCheckerTexels(uint32_t size, uint32_t checkSize) {
     return texels;
 }
 
+// One shadow cascade for the frame (ADR-033). `viewProj` renders AND
+// samples it; the light-space box (centre +- radius in x/y, zBottom..zTop
+// in light-view z, larger z = nearer the light) also culls its casters.
+struct Cascade {
+    glm::mat4 viewProj{1.0f};
+    glm::vec3 center{0.0f}; // light-view space, x/y snapped to whole texels
+    float radius = 0.0f;
+    float zTop = 0.0f;
+    float zBottom = 0.0f;
+    float texel = 0.0f; // world size of one shadow texel
+};
+
+// a * b on raw floats: runs once per shadow draw, and glm's operators are
+// nested function calls in the debug build the game is tested in.
+glm::mat4 multiplyRaw(const glm::mat4& a, const glm::mat4& b) {
+    glm::mat4 out;
+    const float* pa = glm::value_ptr(a);
+    const float* pb = glm::value_ptr(b);
+    float* po = glm::value_ptr(out);
+    for (int c = 0; c < 4; ++c) {
+        for (int r = 0; r < 4; ++r) {
+            po[c * 4 + r] = pa[r] * pb[c * 4] + pa[4 + r] * pb[c * 4 + 1] +
+                            pa[8 + r] * pb[c * 4 + 2] + pa[12 + r] * pb[c * 4 + 3];
+        }
+    }
+    return out;
+}
+
+// Rotation-only light view looking along -dir from the origin: fixed for a
+// given light direction, so a texel grid in its space ignores the camera.
+glm::mat4 lightRotation(glm::vec3 dir) {
+    const glm::vec3 up =
+        std::abs(dir.y) > 0.99f ? glm::vec3(0.0f, 0.0f, 1.0f) : glm::vec3(0.0f, 1.0f, 0.0f);
+    return glm::lookAt(glm::vec3(0.0f), -dir, up);
+}
+
+// Bounding sphere of the view-frustum slice between view depths n and f.
+// The slice is symmetric about the view axis, so the centre lies on it, at
+// the depth equidistant from a near and a far corner — clamped to the far
+// plane when the far cross-section alone is wider (wide FOVs). k = the
+// cross-section's half-diagonal per metre of depth. Returns {depth, radius}.
+std::pair<float, float> sliceSphere(float n, float f, float k) {
+    const float depth = std::min((f + n) * (1.0f + k * k) * 0.5f, f);
+    const float radius = std::sqrt((f - depth) * (f - depth) + k * k * f * f);
+    return {depth, radius};
+}
+
+// Fits cascade `c` around the slice [n, f] of the camera's frustum.
+Cascade fitCascade(const glm::mat4& lightRot, glm::vec3 camPos, glm::vec3 camForward, float n,
+                   float f, float k) {
+    const auto [depth, sphereRadius] = sliceSphere(n, f, k);
+    // Quantize the radius UP to 1/8 of its power of two: the sprint FOV
+    // change then re-grids a cascade once or twice instead of every frame.
+    const float step = std::exp2(std::floor(std::log2(std::max(sphereRadius, 1e-3f))) - 3.0f);
+    Cascade out;
+    out.radius = std::ceil(sphereRadius / step) * step;
+    out.texel = 2.0f * out.radius / static_cast<float>(kShadowMapSize);
+    out.center = glm::vec3(lightRot * glm::vec4(camPos + camForward * depth, 1.0f));
+    out.center.x = std::floor(out.center.x / out.texel) * out.texel;
+    out.center.y = std::floor(out.center.y / out.texel) * out.texel;
+    out.zTop = out.center.z + out.radius + kCasterReach;
+    out.zBottom = out.center.z - out.radius;
+    // glm::ortho (RH, zero-to-one): view z = -near -> 0, -far -> 1.
+    const glm::mat4 proj =
+        glm::ortho(out.center.x - out.radius, out.center.x + out.radius,
+                   out.center.y - out.radius, out.center.y + out.radius, -out.zTop, -out.zBottom);
+    out.viewProj = proj * lightRot;
+    return out;
+}
+
 } // namespace
 
 struct Renderer::Impl {
@@ -283,6 +383,9 @@ struct Renderer::Impl {
         GpuBuffer skinBuffer; // SkinVertex stream; empty for static meshes
         uint32_t indexCount = 0;
         uint32_t jointSpan = 0; // highest joint index referenced + 1 (skinned only)
+        // Model-space bounding sphere (xyz centre, w radius) of the vertices,
+        // for per-cascade caster culling (ADR-033). w < 0 = never culled.
+        glm::vec4 bounds{0.0f, 0.0f, 0.0f, -1.0f};
     };
     std::vector<MeshEntry> meshes;
     struct TextureEntry {
@@ -292,10 +395,22 @@ struct Renderer::Impl {
     std::vector<TextureEntry> textures;
 
     // Directional shadow map (ADR-014): persistent, NOT tied to the swapchain.
+    // One layer per cascade (ADR-033): the array view is sampled, the
+    // per-layer views are the depth attachments.
     VkImage shadowImage = VK_NULL_HANDLE;
     VkDeviceMemory shadowMemory = VK_NULL_HANDLE;
-    VkImageView shadowView = VK_NULL_HANDLE;
+    VkImageView shadowView = VK_NULL_HANDLE; // 2D_ARRAY, all cascades
+    std::array<VkImageView, kShadowCascades> shadowLayerViews{};
     VkSampler shadowSampler = VK_NULL_HANDLE; // comparison sampler (PCF)
+    // This frame's cascades, fitted in drawFrame and read by record().
+    std::array<Cascade, kShadowCascades> cascades{};
+    glm::mat4 lightRot{1.0f};
+    // Light-space AABB of the camera frustum out to the shadow distance:
+    // every receiver that can show a shadow lies inside it (caster culling).
+    struct {
+        glm::vec3 lo{0.0f};
+        glm::vec3 hi{0.0f};
+    } shadowReceivers;
 
     // HDR scene target (swapchain-sized, RGBA16F): the mesh pass renders
     // here; the composite pass tone-maps it into the swapchain image. ONE
@@ -360,6 +475,10 @@ struct Renderer::Impl {
     float exposure = 1.0f;
     float bloomIntensity = 0.6f;
     Sky sky; // ADR-030; defaults = the indoor facility sky
+    // Ambient override (ADR-033): weight 0 = the key-derived default.
+    glm::vec3 ambientSky{0.0f};
+    glm::vec3 ambientGround{0.0f};
+    float ambientWeight = 0.0f;
 
     Impl(Window& win, VulkanContext& ctx) : window(win), context(ctx) {}
 
@@ -415,16 +534,24 @@ void Renderer::Impl::createShadowResources() {
     // every desktop GPU we admit (1.3+) samples D32.
     allocateImage(*device, kShadowMapSize, kShadowMapSize, VK_FORMAT_D32_SFLOAT,
                   VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
-                  shadowImage, shadowMemory);
+                  shadowImage, shadowMemory, 1, kShadowCascades);
 
     VkImageViewCreateInfo viewInfo{};
     viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
     viewInfo.image = shadowImage;
-    viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+    viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D_ARRAY;
     viewInfo.format = VK_FORMAT_D32_SFLOAT;
-    viewInfo.subresourceRange = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, 1};
+    viewInfo.subresourceRange = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, kShadowCascades};
     if (vkCreateImageView(dev, &viewInfo, nullptr, &shadowView) != VK_SUCCESS) {
         throw std::runtime_error("vkCreateImageView (shadow) failed");
+    }
+    // One single-layer view per cascade: what each cascade's pass renders to.
+    viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+    for (uint32_t c = 0; c < kShadowCascades; ++c) {
+        viewInfo.subresourceRange = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, c, 1};
+        if (vkCreateImageView(dev, &viewInfo, nullptr, &shadowLayerViews[c]) != VK_SUCCESS) {
+            throw std::runtime_error("vkCreateImageView (shadow cascade) failed");
+        }
     }
 
     // Comparison sampler: LINEAR + compare = hardware 2x2 PCF per tap.
@@ -1389,22 +1516,78 @@ void Renderer::Impl::record(VkCommandBuffer cmd, uint32_t imageIndex, uint32_t f
         }
     };
     const VkDeviceSize vbOffsets[2] = {0, 0};
-    const auto drawItemMesh = [&](const DrawItem& item, bool skinned) {
+    // `transform` is what the vertex stage sees as push.model: the item's
+    // model matrix in the scene pass, cascade view-proj * model in shadows.
+    const auto drawItemMesh = [&](const DrawItem& item, bool skinned, const glm::mat4& transform) {
         const MeshEntry& mesh = meshes[item.mesh.value];
         const VkBuffer vbs[2] = {mesh.vertexBuffer.handle(),
                                  skinned ? mesh.skinBuffer.handle() : VK_NULL_HANDLE};
         vkCmdBindVertexBuffers(cmd, 0, skinned ? 2u : 1u, vbs, vbOffsets);
         vkCmdBindIndexBuffer(cmd, mesh.indexBuffer.handle(), 0, VK_INDEX_TYPE_UINT32);
-        const DrawPush push{item.model, glm::vec4(item.emissive, 0.0f),
-                            glm::vec4(item.tint, 1.0f),
+        const DrawPush push{transform, glm::vec4(item.emissive, item.roughness),
+                            glm::vec4(item.tint, item.metallic),
                             glm::uvec4(skinned ? item.jointOffset : 0u, 0u, 0u, 0u)};
         vkCmdPushConstants(cmd, pipelineLayout, kDrawPushStages, 0, sizeof(DrawPush), &push);
         vkCmdDrawIndexed(cmd, mesh.indexCount, 1, 0, 0, 0);
     };
 
-    // ---- Pass 1: shadow map, from the light's point of view (ADR-014).
+    // ---- Pass 1: shadow cascades, from the light's point of view (ADR-014,
+    // ADR-033). Casters: everything but bright emitters — laser beams and
+    // light strips ARE light, and a beam casting a shadow line reads as a
+    // bug. Each caster's world bounding sphere (static meshes only: a
+    // skinned pose can leave its bind-pose bounds) is culled in light space:
+    // first against the light-space box of everything the camera can see
+    // shadowed (shadowReceivers: no shadow can land in view from outside
+    // it), then per cascade against that cascade's box. Far-off geometry
+    // (the other location, 400 m away) costs no shadow draws at all.
+    // Plain float math on purpose: this runs per item per frame, and glm's
+    // operators are function calls in the debug build.
+    struct Caster {
+        const DrawItem* item;
+        bool skinned;
+        bool cullable;
+        float x, y, z; // light-view space centre
+        float radius;
+    };
+    std::vector<Caster> casters;
+    casters.reserve(items.size());
+    std::vector<Caster> skinnedCasters; // drawn last: one pipeline switch per cascade
+    const float* rot = glm::value_ptr(lightRot);
+    for (const DrawItem& item : items) {
+        const glm::vec3& e = item.emissive;
+        if (item.mesh.value >= meshes.size() || e.r > 1.0f || e.g > 1.0f || e.b > 1.0f) {
+            continue;
+        }
+        Caster caster{&item, isSkinned(item), false, 0.0f, 0.0f, 0.0f, 0.0f};
+        const float* b = glm::value_ptr(meshes[item.mesh.value].bounds);
+        if (caster.skinned || b[3] < 0.0f) {
+            (caster.skinned ? skinnedCasters : casters).push_back(caster);
+            continue;
+        }
+        const float* m = glm::value_ptr(item.model); // column-major: m[col * 4 + row]
+        const float wx = m[0] * b[0] + m[4] * b[1] + m[8] * b[2] + m[12];
+        const float wy = m[1] * b[0] + m[5] * b[1] + m[9] * b[2] + m[13];
+        const float wz = m[2] * b[0] + m[6] * b[1] + m[10] * b[2] + m[14];
+        caster.x = rot[0] * wx + rot[4] * wy + rot[8] * wz + rot[12];
+        caster.y = rot[1] * wx + rot[5] * wy + rot[9] * wz + rot[13];
+        caster.z = rot[2] * wx + rot[6] * wy + rot[10] * wz + rot[14];
+        const float sx = m[0] * m[0] + m[1] * m[1] + m[2] * m[2];
+        const float sy = m[4] * m[4] + m[5] * m[5] + m[6] * m[6];
+        const float sz = m[8] * m[8] + m[9] * m[9] + m[10] * m[10];
+        caster.radius = b[3] * std::sqrt(std::max(sx, std::max(sy, sz)));
+        caster.cullable = true;
+        const float r = caster.radius;
+        if (caster.x + r < shadowReceivers.lo.x || caster.x - r > shadowReceivers.hi.x ||
+            caster.y + r < shadowReceivers.lo.y || caster.y - r > shadowReceivers.hi.y ||
+            caster.z + r < shadowReceivers.lo.z) {
+            continue; // its shadow falls nowhere the camera can see
+        }
+        casters.push_back(caster);
+    }
+    casters.insert(casters.end(), skinnedCasters.begin(), skinnedCasters.end());
+
     // UNDEFINED discard is fine (cleared every frame) and doubles as the
-    // frame-N/N+1 execution barrier on the shared map.
+    // frame-N/N+1 execution barrier on the shared map (all layers).
     transitionImage(
         cmd, shadowImage, VK_IMAGE_ASPECT_DEPTH_BIT, VK_IMAGE_LAYOUT_UNDEFINED,
         VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
@@ -1415,43 +1598,50 @@ void Renderer::Impl::record(VkCommandBuffer cmd, uint32_t imageIndex, uint32_t f
         VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT |
             VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT);
 
-    VkRenderingAttachmentInfo shadowDepth{};
-    shadowDepth.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
-    shadowDepth.imageView = shadowView;
-    shadowDepth.imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
-    shadowDepth.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
-    shadowDepth.storeOp = VK_ATTACHMENT_STORE_OP_STORE; // sampled by pass 2
-    shadowDepth.clearValue.depthStencil = {1.0f, 0};
-
-    VkRenderingInfo shadowRendering{};
-    shadowRendering.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
-    shadowRendering.renderArea = {{0, 0}, {kShadowMapSize, kShadowMapSize}};
-    shadowRendering.layerCount = 1;
-    shadowRendering.pDepthAttachment = &shadowDepth;
-
-    vkCmdBeginRendering(cmd, &shadowRendering);
     const VkViewport shadowViewport{
         0.0f, 0.0f, static_cast<float>(kShadowMapSize), static_cast<float>(kShadowMapSize),
         0.0f, 1.0f};
     const VkRect2D shadowScissor{{0, 0}, {kShadowMapSize, kShadowMapSize}};
-    vkCmdSetViewport(cmd, 0, 1, &shadowViewport);
-    vkCmdSetScissor(cmd, 0, 1, &shadowScissor);
-    if (!items.empty()) {
+    if (!casters.empty()) { // set 0: the skinned shadow stage reads the joint palette
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout, 0, 1,
                                 &frameSets[frame], 0, nullptr);
-        for (const DrawItem& item : items) {
-            // Bright emitters (laser beams, light strips) ARE light: a beam
-            // casting a shadow line on the floor reads as a bug.
-            if (item.mesh.value >= meshes.size() ||
-                std::max({item.emissive.r, item.emissive.g, item.emissive.b}) > 1.0f) {
-                continue;
-            }
-            const bool skinned = isSkinned(item);
-            bindFor(skinned, shadowPipeline, skinnedShadowPipeline);
-            drawItemMesh(item, skinned); // no material set: depth doesn't care about albedo
-        }
     }
-    vkCmdEndRendering(cmd);
+    for (uint32_t c = 0; c < kShadowCascades; ++c) {
+        const Cascade& cascade = cascades[c];
+        VkRenderingAttachmentInfo shadowDepth{};
+        shadowDepth.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+        shadowDepth.imageView = shadowLayerViews[c];
+        shadowDepth.imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+        shadowDepth.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+        shadowDepth.storeOp = VK_ATTACHMENT_STORE_OP_STORE; // sampled by pass 2
+        shadowDepth.clearValue.depthStencil = {1.0f, 0};
+
+        VkRenderingInfo shadowRendering{};
+        shadowRendering.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
+        shadowRendering.renderArea = {{0, 0}, {kShadowMapSize, kShadowMapSize}};
+        shadowRendering.layerCount = 1;
+        shadowRendering.pDepthAttachment = &shadowDepth;
+
+        vkCmdBeginRendering(cmd, &shadowRendering);
+        vkCmdSetViewport(cmd, 0, 1, &shadowViewport);
+        vkCmdSetScissor(cmd, 0, 1, &shadowScissor);
+        for (const Caster& caster : casters) {
+            if (caster.cullable) {
+                const float reach = cascade.radius + caster.radius;
+                if (std::abs(caster.x - cascade.center.x) > reach ||
+                    std::abs(caster.y - cascade.center.y) > reach ||
+                    caster.z - caster.radius > cascade.zTop ||
+                    caster.z + caster.radius < cascade.zBottom) {
+                    continue;
+                }
+            }
+            bindFor(caster.skinned, shadowPipeline, skinnedShadowPipeline);
+            // No material set: depth doesn't care about albedo.
+            drawItemMesh(*caster.item, caster.skinned,
+                         multiplyRaw(cascade.viewProj, caster.item->model));
+        }
+        vkCmdEndRendering(cmd);
+    }
 
     // Depth writes done -> fragment shader reads (pass 2 samples the map).
     transitionImage(
@@ -1545,7 +1735,7 @@ void Renderer::Impl::record(VkCommandBuffer cmd, uint32_t imageIndex, uint32_t f
                 item.texture.value < textures.size() ? item.texture.value : 0u;
             vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout, 1, 1,
                                     &textures[texture].set, 0, nullptr);
-            drawItemMesh(item, skinned);
+            drawItemMesh(item, skinned, item.model);
         }
     }
     vkCmdEndRendering(cmd);
@@ -1650,10 +1840,11 @@ Renderer::Renderer(Window& window, VulkanContext& context)
     const TextureHandle white = addTexture(1, 1, kWhite);
     (void)white;
     FORGE_INFO("renderer ready: dynamic rendering, depth {}, {} frames in flight, "
-               "{}x{} shadow map, RGBA16F HDR scene + {}-mip bloom + ACES composite, "
-               "checker placeholder as texture 0",
+               "{} x {}x{} shadow cascades to {} m, RGBA16F HDR scene + {}-mip bloom + "
+               "ACES composite, checker placeholder as texture 0",
                m_impl->depthFormat == VK_FORMAT_D32_SFLOAT ? "D32_SFLOAT" : "D+S fallback",
-               kFramesInFlight, kShadowMapSize, kShadowMapSize, m_impl->bloomViews.size());
+               kFramesInFlight, kShadowCascades, kShadowMapSize, kShadowMapSize, kShadowFar,
+               m_impl->bloomViews.size());
 }
 
 Renderer::~Renderer() {
@@ -1681,6 +1872,9 @@ Renderer::~Renderer() {
         vkDestroyDescriptorSetLayout(dev, m_impl->materialSetLayout, nullptr);
         vkDestroySampler(dev, m_impl->shadowSampler, nullptr);
         vkDestroyImageView(dev, m_impl->shadowView, nullptr);
+        for (const VkImageView view : m_impl->shadowLayerViews) {
+            vkDestroyImageView(dev, view, nullptr);
+        }
         vkDestroyImage(dev, m_impl->shadowImage, nullptr);
         vkFreeMemory(dev, m_impl->shadowMemory, nullptr);
         m_impl->textures.clear(); // VulkanTextures need the device alive
@@ -1715,6 +1909,24 @@ void Renderer::Impl::buildMeshEntry(std::span<const Vertex> vertices,
     uploadToBuffer(*device, commandPool, out.vertexBuffer.handle(), vertices.data(), vertexBytes);
     uploadToBuffer(*device, commandPool, out.indexBuffer.handle(), indices.data(), indexBytes);
     out.indexCount = static_cast<uint32_t>(indices.size());
+    // Bounding sphere for shadow-caster culling (ADR-033): the AABB's centre
+    // and the farthest vertex from it — loose but cheap, and conservative.
+    out.bounds = glm::vec4(0.0f, 0.0f, 0.0f, -1.0f);
+    if (!vertices.empty()) {
+        glm::vec3 lo = vertices.front().position;
+        glm::vec3 hi = lo;
+        for (const Vertex& v : vertices) {
+            lo = glm::min(lo, v.position);
+            hi = glm::max(hi, v.position);
+        }
+        const glm::vec3 center = 0.5f * (lo + hi);
+        float radiusSq = 0.0f;
+        for (const Vertex& v : vertices) {
+            const glm::vec3 d = v.position - center;
+            radiusSq = std::max(radiusSq, glm::dot(d, d));
+        }
+        out.bounds = glm::vec4(center, std::sqrt(radiusSq));
+    }
     out.skinBuffer = GpuBuffer{};
     out.jointSpan = 0;
     if (!skin.empty()) {
@@ -1841,31 +2053,77 @@ void Renderer::drawFrame(const Camera& camera, std::span<const DrawItem> items,
                                       camera.farPlane);
     proj[1][1] *= -1.0f; // GL's Y-up clip space -> Vulkan's Y-down (ADR-012)
 
-    // Light matrices (ADR-014): ortho box around the demo scene, eye pushed
-    // back along the light direction. NO Y-flip here — the shadow map is
-    // rendered AND sampled through this same matrix, so the convention
+    // Shadow cascades (ADR-014, ADR-033). The key light comes from Impl
+    // (app-settable per room, week 5). The cascades cover the camera's own
+    // frustum out to kShadowFar, split by the practical scheme; each one is
+    // the bounding sphere of its slice, snapped to whole texels in a light
+    // space that only rotates with the light (fitCascade). NO Y-flip — each
+    // map is rendered AND sampled through the same matrix, so the convention
     // cancels out; only the swapchain path needs the flip.
-    // Key light comes from Impl (app-settable per room, week 5) — defaults to
-    // the warm facility key if setLighting() was never called.
     const glm::vec3 lightDir = impl.lightDir;
-    // The light frustum FOLLOWS the camera: a fixed origin-centered box left
-    // everything beyond its far plane failing the shadow compare (ref > 1.0)
-    // -> whole rooms in permanent fake shadow. Texel swim on camera motion is
-    // the known cost; snapping is a polish-pass item.
-    const glm::mat4 lightView =
-        glm::lookAt(camera.position + lightDir * 25.0f, camera.position, glm::vec3(0, 1, 0));
-    const glm::mat4 lightProj = glm::ortho(-16.0f, 16.0f, -16.0f, 16.0f, 0.1f, 60.0f);
+    impl.lightRot = lightRotation(lightDir);
+    {
+        glm::vec3 forward = camera.target - camera.position;
+        const float forwardLen = glm::length(forward);
+        forward = forwardLen > 1e-6f ? forward / forwardLen : glm::vec3(0.0f, 0.0f, -1.0f);
+        const float nearZ = std::max(camera.nearPlane, 0.01f);
+        const float farZ = std::max(std::min(kShadowFar, camera.farPlane), nearZ + 1.0f);
+        const float tanHalfY = std::tan(glm::radians(camera.fovYDegrees) * 0.5f);
+        const float k = tanHalfY * std::sqrt(1.0f + aspect * aspect); // half-diagonal / depth
+        float sliceNear = nearZ;
+        for (uint32_t c = 0; c < kShadowCascades; ++c) {
+            const float p = static_cast<float>(c + 1) / static_cast<float>(kShadowCascades);
+            const float logSplit = nearZ * std::pow(farZ / nearZ, p);
+            const float uniformSplit = nearZ + (farZ - nearZ) * p;
+            const float sliceFar =
+                kCascadeSplitLambda * logSplit + (1.0f - kCascadeSplitLambda) * uniformSplit;
+            impl.cascades[c] =
+                fitCascade(impl.lightRot, camera.position, forward, sliceNear, sliceFar, k);
+            sliceNear = sliceFar;
+        }
+        // The frustum [nearZ, farZ] in light space, as an AABB (caster culling).
+        const glm::vec3 worldUp = std::abs(forward.y) > 0.999f ? glm::vec3(0.0f, 0.0f, 1.0f)
+                                                               : glm::vec3(0.0f, 1.0f, 0.0f);
+        const glm::vec3 right = glm::normalize(glm::cross(forward, worldUp));
+        const glm::vec3 up = glm::cross(right, forward);
+        impl.shadowReceivers.lo = glm::vec3(std::numeric_limits<float>::max());
+        impl.shadowReceivers.hi = glm::vec3(std::numeric_limits<float>::lowest());
+        for (const float depth : {nearZ, farZ}) {
+            for (const float sx : {-1.0f, 1.0f}) {
+                for (const float sy : {-1.0f, 1.0f}) {
+                    const glm::vec3 corner = camera.position + forward * depth +
+                                             right * (sx * tanHalfY * aspect * depth) +
+                                             up * (sy * tanHalfY * depth);
+                    const glm::vec3 ls = glm::vec3(impl.lightRot * glm::vec4(corner, 1.0f));
+                    impl.shadowReceivers.lo = glm::min(impl.shadowReceivers.lo, ls);
+                    impl.shadowReceivers.hi = glm::max(impl.shadowReceivers.hi, ls);
+                }
+            }
+        }
+        // 1 m of slack: mesh.frag's normal offset moves lookups a little.
+        impl.shadowReceivers.lo -= glm::vec3(1.0f);
+        impl.shadowReceivers.hi += glm::vec3(1.0f);
+    }
 
     FrameUbo ubo{};
     ubo.viewProj = proj * view;
-    ubo.lightViewProj = lightProj * lightView;
+    ubo.lightViewProj = impl.cascades[0].viewProj;
     ubo.cameraPos = glm::vec4(camera.position, 1.0f);
     ubo.lightDirection = glm::vec4(lightDir, 0.0f);
     ubo.lightColor = glm::vec4(impl.lightColor, 1.0f); // rgb * HDR intensity
     ubo.fogColor = glm::vec4(impl.fogColor, impl.fogDensity);
-    ubo.ambientSky = glm::vec4(kAmbientSkyBase + impl.lightColor * kAmbientSkyFromKey, 0.0f);
-    ubo.ambientGround =
-        glm::vec4(kAmbientGroundBase + impl.lightColor * kAmbientGroundFromKey, 0.0f);
+    // Hemisphere ambient: the key-derived default, blended toward the
+    // script's colours by ambientWeight (0 = exactly the default, ADR-033).
+    const glm::vec3 defaultSky = kAmbientSkyBase + impl.lightColor * kAmbientSkyFromKey;
+    const glm::vec3 defaultGround = kAmbientGroundBase + impl.lightColor * kAmbientGroundFromKey;
+    ubo.ambientSky = glm::vec4(
+        impl.ambientWeight > 0.0f ? glm::mix(defaultSky, impl.ambientSky, impl.ambientWeight)
+                                  : defaultSky,
+        0.0f);
+    ubo.ambientGround = glm::vec4(
+        impl.ambientWeight > 0.0f ? glm::mix(defaultGround, impl.ambientGround, impl.ambientWeight)
+                                  : defaultGround,
+        0.0f);
     ubo.counts = glm::vec4(static_cast<float>(impl.pointLightCount), 0.0f, 0.0f, 0.0f);
     for (uint32_t i = 0; i < impl.pointLightCount; ++i) {
         const PointLight& light = impl.pointLights[i];
@@ -1885,6 +2143,15 @@ void Renderer::drawFrame(const Camera& camera, std::span<const DrawItem> items,
                            sky.sunSize > 0.0f ? std::cos(glm::radians(sky.sunSize)) : 2.0f);
     ubo.skyParams = glm::vec4(panorama ? 1.0f : 0.0f, sky.panoramaIntensity, camera.farPlane,
                               sky.sunHalo);
+    // Cascade tail (ADR-033). The fade scales down with a near far plane, so
+    // shadows still fade out before the geometry ends.
+    for (uint32_t c = 0; c < kShadowCascades; ++c) {
+        ubo.cascadeViewProj[c] = impl.cascades[c].viewProj;
+        ubo.cascadeTexel[static_cast<glm::length_t>(c)] = impl.cascades[c].texel;
+    }
+    const float shadowEnd = std::min(kShadowFar, camera.farPlane);
+    ubo.shadowParams = glm::vec4(kShadowFadeStart * (shadowEnd / kShadowFar), shadowEnd,
+                                 kCascadeBlendBand, kShadowNormalOffsetTexels);
     impl.frameUbos[frame].writeBytes(&ubo, sizeof(ubo));
     // Joint palette (ADR-030): same fence-guarded slot as the UBO. Overflow
     // is clipped; draws whose slice no longer fits fall back to bind pose.
@@ -1986,6 +2253,18 @@ void Renderer::setSky(const Sky& sky) {
     clean.sunHalo = std::max(clean.sunHalo, 0.0f);
     clean.panoramaIntensity = std::max(clean.panoramaIntensity, 0.0f);
     m_impl->sky = clean;
+}
+
+void Renderer::setAmbient(glm::vec3 sky, glm::vec3 ground, float weight) {
+    m_impl->ambientSky = glm::max(sky, glm::vec3(0.0f));
+    m_impl->ambientGround = glm::max(ground, glm::vec3(0.0f));
+    m_impl->ambientWeight = std::clamp(weight, 0.0f, 1.0f);
+}
+
+void Renderer::resetAmbient() {
+    m_impl->ambientSky = glm::vec3(0.0f);
+    m_impl->ambientGround = glm::vec3(0.0f);
+    m_impl->ambientWeight = 0.0f;
 }
 
 namespace internal {

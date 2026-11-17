@@ -52,6 +52,10 @@ struct SpawnOptions {
     // CPU triangles.
     bool meshCollider = false;
     float yawDeg = 0.0f; // yaw = degrees about +Y at spawn: visual AND collider
+    // Surface response (ADR-033), 0..1; nullopt = the renderer's defaults
+    // (roughness 0.35, metallic 0.15). Rock and soil want ~0.9 roughness.
+    std::optional<float> roughness;
+    std::optional<float> metallic;
 };
 
 // Optional table on forge.anim.play (ADR-030): {loop=, speed=, fade=,
@@ -133,6 +137,11 @@ public:
     // renderer has HDR + bloom. emissive is linear HDR radiance (> 1 blooms).
     std::function<void(const std::string& name, glm::vec3 emissive)> onSetEntityEmissive;
     std::function<void(const std::string& name, glm::vec3 tint)> onSetEntityTint;
+    // forge.scene.setRoughness / setMetallic (ADR-033): one hook, the field
+    // not being set is nullopt.
+    std::function<void(const std::string& name, std::optional<float> roughness,
+                       std::optional<float> metallic)>
+        onSetEntityMaterial;
     std::function<bool(const std::string& name)> onEntityExists;
     // Body <-> name: raycasts return body ids; puzzles think in names. Also
     // retires the fragile "overlap a box and hope it is unambiguous" lookup.
@@ -157,6 +166,9 @@ public:
     std::function<void(float exposure)> onSetExposure;
     std::function<void(float intensity)> onSetBloom;
     std::function<void(const SkyOptions& sky)> onSetSky; // ADR-030
+    // forge.render.set_ambient (ADR-033): hemisphere ambient, linear HDR;
+    // weight 0 = the renderer's key-derived default (what no args sends).
+    std::function<void(glm::vec3 sky, glm::vec3 ground, float weight)> onSetAmbient;
     // HUD: transient toasts ("DATA CORE 3/8") and named stat lines the host
     // shows on the pause/win screens. Camera shake for impacts.
     std::function<void(const std::string& text, float seconds)> onToast;

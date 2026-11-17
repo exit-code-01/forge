@@ -232,6 +232,8 @@ struct MeshRendererC {
     glm::vec3 emissive{0.0f};     // linear HDR radiance added after lighting
     glm::vec3 tint{1.0f};         // albedo multiplier
     bool textureOverride = false; // a named texture replaces authored materials
+    float roughness = forge::DrawItem::kDefaultRoughness; // ADR-033
+    float metallic = forge::DrawItem::kDefaultMetallic;
 };
 // Entities spawned from an animated model (ADR-030) get one: forge.anim.*
 // drives it, the frame loop advances it and uploads its joint palette.
@@ -652,6 +654,8 @@ int main() {
             }
             if (options != nullptr) {
                 t.eulerDeg.y = options->yawDeg; // spawn yaw: visual + collider (ADR-032)
+                mrc.roughness = std::clamp(options->roughness.value_or(mrc.roughness), 0.0f, 1.0f);
+                mrc.metallic = std::clamp(options->metallic.value_or(mrc.metallic), 0.0f, 1.0f);
             }
             // collider = "mesh" (ADR-032): the model's own triangles, static.
             bool meshBody = false;
@@ -1044,6 +1048,15 @@ int main() {
                 }
             }
         };
+        script.onSetEntityMaterial = [&](const std::string& name, std::optional<float> roughness,
+                                         std::optional<float> metallic) { // ADR-033
+            if (const auto e = findByName(name); scene.alive(e)) {
+                if (auto* mr = scene.tryGet<MeshRendererC>(e)) {
+                    mr->roughness = roughness ? std::clamp(*roughness, 0.0f, 1.0f) : mr->roughness;
+                    mr->metallic = metallic ? std::clamp(*metallic, 0.0f, 1.0f) : mr->metallic;
+                }
+            }
+        };
         // ---- Skeletal animation seams (ADR-030).
         script.onAnimPlay = [&](const std::string& name, const std::string& clip,
                                 const forge::AnimPlayOptions& o) {
@@ -1149,6 +1162,11 @@ int main() {
         script.onSetFog = [&](glm::vec3 color, float density) {
             if (renderer) {
                 renderer->setFog(color, density);
+            }
+        };
+        script.onSetAmbient = [&](glm::vec3 sky, glm::vec3 ground, float weight) { // ADR-033
+            if (renderer) {
+                renderer->setAmbient(sky, ground, weight);
             }
         };
         script.onSetExposure = [&](float exposure) {
@@ -2093,7 +2111,8 @@ int main() {
                     if (mr.model < models.size()) {
                         forge::appendModelDraws(
                             items, models[mr.model], model,
-                            forge::ModelLook{mr.texture, mr.textureOverride, emissive, mr.tint},
+                            forge::ModelLook{mr.texture, mr.textureOverride, emissive, mr.tint,
+                                             mr.roughness, mr.metallic},
                             jointOffset);
                     }
                 });

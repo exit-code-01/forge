@@ -78,6 +78,8 @@ void appendModelDraws(std::vector<DrawItem>& out, const Model& model, const glm:
         item.mesh = part.mesh;
         item.model = world;
         item.emissive = look.emissive;
+        item.roughness = look.roughness;
+        item.metallic = look.metallic;
         item.jointOffset = part.skinned ? jointOffset : DrawItem::kNoJoints;
         if (part.authored && !look.textureOverride) {
             item.texture = part.texture;

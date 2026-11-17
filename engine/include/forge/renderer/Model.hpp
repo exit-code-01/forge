@@ -69,6 +69,8 @@ struct ModelLook {
     bool textureOverride = false; // a NAMED texture was given — see the rule
     glm::vec3 emissive{0.0f};
     glm::vec3 tint{1.0f};
+    float roughness = DrawItem::kDefaultRoughness; // ADR-033: whole entity, every part
+    float metallic = DrawItem::kDefaultMetallic;
 };
 
 // File-backed images already on the GPU, by normalized path: pass the same
