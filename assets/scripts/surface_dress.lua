@@ -53,8 +53,8 @@ function SURFACE_DRESS(K)
     -- ---- rock skins (tools/gen_terrain.py): faceted meshes that sit just in
     -- front of the box terrain and lean back over the cliff tiers, so the
     -- valley stops reading as slabs. Authored in WORLD space around
-    -- (400, 0, 0): spawn there, scale 1, no yaw. No colliders: the boxes
-    -- stay the colliders, and below 2.7 m the skins keep within 0.21 m of them.
+    -- (400, 0, 0): spawn there, scale 1, no yaw. Mesh colliders (ADR-032): the boxes
+    -- stay behind them as backing, and below 2.7 m the skins keep within 0.21 m of them.
     local skinned = forge.scene.has_model("srf_terr_cliffs")
     local ROCKFILL = vec3(0.115, 0.103, 0.091) -- shade fill, as surface.lua
     for _, m in ipairs({ "srf_terr_cliffs", "srf_terr_ravine", "srf_terr_outcrops" }) do
@@ -69,7 +69,7 @@ function SURFACE_DRESS(K)
     put("srf_terr_tops", 400, 0, 0, 0, 1, "mesh") -- platform tops: sunlit, no shade fill
 
     -- ---- cliff faces: one 6 m wall tile per cell on the innermost tier, a
-    -- hand's width proud of the box face (the boxes stay the colliders).
+    -- hand's width proud of the box face (the skins are the colliders now; boxes are backing).
     -- Only the fallback now: the cliff skin covers the same faces.
     for i = 0, (skinned and -1 or 14) do
         local c = 359 + i * 6

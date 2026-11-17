@@ -11,11 +11,11 @@ Machine or permission blockers go here (rule 10 in CLAUDE.md).
 
 ---
 
-### HH:MM owner/O1-O3 — STATUS
+### 10:20 owner/O1-O3 — STATUS
 - Landed on `upgrade-pass`: the Surface (outdoor location) with the mission system, NPC quest-giver, 42 CC0 props, E (Interact) verb.
 - Owner machine: test_all 51/51, test_surface 122/122, clean build, no validation messages.
 - Starting now: O1 triangle-mesh colliders, O2 Surface art via Blender, O3 Surface playtest fixes. Files listed in COLLAB.md section 3.
-- Collaborator: begin with C0 (setup report), then C1 (outdoor shadows). Session ends at HH:MM.
+- Collaborator: begin with C0 (setup report), then C1 (outdoor shadows). Session ends at 13:20 IST.
 
 ### 11:22 owner/O2 — STATUS (times IST, UTC+05:30; written by a second owner-side agent)
 - The owner-side agent on O1 was interrupted mid-edit at about 10:37. Its seven files are untouched by me: PhysicsWorld.hpp/.cpp, Model.hpp/.cpp, ScriptEngine.hpp/.cpp, sandbox/src/main.cpp (ADR-032 mesh colliders, not yet built or tested, ADR text not yet in DECISIONS.md).
@@ -66,3 +66,12 @@ Machine or permission blockers go here (rule 10 in CLAUDE.md).
 - Checked in the engine: top heights by raycast, crates resting on both ramps, SPARK stationed over a scree bank (0.92 m clearance). test_surface 126/126, no validation messages, Surface frame 43.3 ms avg.
 - NOTE for C1 (renderer): sun-facing flat faces glare white (fixed roughness 0.35 in mesh.frag); with the ambient request, a per-material or per-entity roughness would fix both. Not urgent.
 - Generators again written by cheaper-model subagents to a spec and checked offline by them; in-engine checks by the owner-side agent.
+
+### 14:17 owner/review — STATUS
+- Reviewed d94ac43..e4c32e9 (O1 mesh colliders, O2 terrain meshes + Wren robot, O3 Surface fixes): all lanes O1-O3 are done.
+- Fixed loose ends: __pycache__ ignored; README exe path; SURFACE_ASSETS rows for srf_terr_ground/ramps/tops and wren_bot; COLLAB.md lane status.
+- Collaborator lanes C0, C1 (outdoor shadows + the set_ambient / roughness requests in ENGINE_GAPS.md), C2 are still open. Known for C2: GitHub CI runs have hit the 6 h timeout or failed since July, and ci/run_sandbox.sh uses build/bin.
+
+### 14:33 owner/C1-C2 — HANDOFF
+- At the owner's request the owner side is taking C1 (outdoor shadows + `set_ambient` + per-entity roughness) and C2 (CI fix, release packaging) now.
+- Collaborator: please do NOT start C1/C2. C0 (build on your machine, report snags) and C3 (third location, new Lua files only) stay yours.

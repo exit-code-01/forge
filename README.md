@@ -13,9 +13,9 @@ before touching code. Coordination happens in [docs/COLLAB_LOG.md](docs/COLLAB_L
 ## Build
 
 ```sh
-cmake -B build
-cmake --build build
-./build/bin/forge_sandbox
+cmake --preset debug
+cmake --build --preset debug
+./build/debug/bin/forge_sandbox
 ```
 
 **Linux build prerequisites** (GLFW's X11/Wayland backends need these; GLFW/GLM

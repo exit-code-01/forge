@@ -42,7 +42,7 @@ The README says `build/bin`; the presets actually output to `build\debug\bin`.
   cp tools/dev/test_mesh.lua build/_start.lua    && bash tools/dev/rundev.sh 30    # expect 16 PASS (ADR-032)
   grep -c "T> PASS" build/_dev.log ; grep "T> FAIL" build/_dev.log
   ```
-  Lines look like `[lua] T> PASS p2 the run ends (win screen) [2.3s]`; a finished run ends with `T> DONE`. Need zero `T> FAIL` and PASS counts of 51 / 126. If DONE never appears, raise the seconds argument (slower GPU) and report it.
+  Lines look like `[lua] T> PASS p2 the run ends (win screen) [2.3s]`; a finished run ends with `T> DONE`. Need zero `T> FAIL` and PASS counts of 51 / 126 / 16 (test_all / test_surface / test_mesh). If DONE never appears, raise the seconds argument (slower GPU) and report it.
 - `tools/dev/gui.py` (Windows, ctypes): `cap <png>`, `key <name>`, `look dx dy`, `resize w h`, `rect`, for the window "Forge Sandbox".
 
 **Gotchas**
@@ -56,9 +56,9 @@ The README says `build/bin`; the presets actually output to `build\debug\bin`.
 ## 3. Lanes and file ownership
 | Lane | Side | Goal | Owns (only this lane edits) | Done when |
 |---|---|---|---|---|
-| O1 | owner | Static triangle-mesh colliders so real terrain can replace slab walls | `engine/src/physics/*`, `ScriptEngine.*`, `sandbox/src/main.cpp` | Lua can spawn a mesh collider; character walks on it; tests pass |
-| O2 | owner (Blender MCP) | Surface art pass: terrain/cliff meshes, robot quest-giver model | `assets/models/*`, `assets/scripts/surface*.lua`, `missions.lua`, `scene.lua` | Surface no longer reads as slabs; tests pass |
-| O3 | owner | Playtest fixes on the Surface (E prompt through walls, dark head-house, over-explicit hints) | same Lua files as O2 | Issues fixed; 126/126 |
+| O1 | owner | Static triangle-mesh colliders so real terrain can replace slab walls | `engine/src/physics/*`, `ScriptEngine.*`, `sandbox/src/main.cpp` | Lua can spawn a mesh collider; character walks on it; tests pass **DONE** (d94ac43..e4c32e9) |
+| O2 | owner (Blender MCP) | Surface art pass: terrain/cliff meshes, robot quest-giver model | `assets/models/*`, `assets/scripts/surface*.lua`, `missions.lua`, `scene.lua` | Surface no longer reads as slabs; tests pass **DONE** (d94ac43..e4c32e9) |
+| O3 | owner | Playtest fixes on the Surface (E prompt through walls, dark head-house, over-explicit hints) | same Lua files as O2 | Issues fixed; 126/126 **DONE** (d94ac43..e4c32e9) |
 | C0 | collab | **First 30-40 min, mandatory**: clone, build, run both sequencers; record results and every setup snag in COLLAB_LOG; fix section 2 of this file where wrong | `docs/COLLAB.md` section 2, `docs/COLLAB_LOG.md`, `tools/dev/*` | Log has counts (51/51, 126/126 or exact deviations) and the snag list |
 | C1 | collab | **Main task: outdoor shadows.** Today one shadow map follows the camera and ends about 16 m out. Goal: shadows to >= 60 m outdoors with a soft distance fade, no visible regression indoors. Cascaded shadow maps (2-3 cascades) or a justified simpler scheme; texel-snap to stop swimming | `engine/src/renderer/*`, engine shaders (`mesh.frag`, `shadow*.vert`, plus recompiled `.spv`) | Before/after screenshots (Surface and one facility room) in PR/log; frame time no worse than +10 %; gate passes; ADR added. Must not change the Renderer public API used by main.cpp except by ADDING optional things; if a main.cpp change is unavoidable, keep it <= 20 lines and announce in the log first |
 | C2 | collab (stretch, if C1 is done or blocked) | Release build + packaging: a `release` preset (one exists in CMakePresets.json; verify it works), `tools/package.py` producing a zip (exe + assets + licences/attribution) that runs on a machine without the SDK, fix/extend `ci/` and `.github/workflows/ci.yml` for a Windows build | `CMakePresets.json`, `ci/`, `.github/workflows/`, `tools/package.py` | Zip runs on a clean machine; CI Windows job builds |
