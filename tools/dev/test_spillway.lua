@@ -192,7 +192,7 @@ put("Spl Crate W1", 797.0, 2.4, -14.5)
 untilC("e3 a spare crate goes over the drop and comes home", function()
     return near(pos("Spl Crate W1"), vec3(766.8, 1.36, -4.8)) < 1.0 end, 16)
 -- stand on each lodged crate (a real body under a real player)
-for i, z in ipairs({ -7.7, -9.9, -12.1 }) do
+for i, z in ipairs({ -7.75, -10.6, -13.45 }) do
     tp(800.0, 0.35 + 0.97, z, 0); wait(0.8)
     chk("e4 stands on lodged crate " .. i, function() return P().y > 1.0 and P().y < 1.8 and math.abs(P().z - z) < 1.2, fmt(P()) end)
 end
@@ -214,10 +214,10 @@ untilC("f1 SPARK flies ahead into the hall and lights it", function() return M()
 act(function() DBG.drone.station = nil end)
 chk("f1 the beam starts at the emitter and no prism turns it", function()
     return M().tb.on == false and M().tb.prismHit ~= true end)
-put("Spl Prism", 823.0, 1.5, -25.5); wait(0.8) -- on the beam, but a metre off the marker
+put("Spl Prism", 823.6, 1.5, -25.5); wait(0.8) -- on the beam, 1.6 m off the marker (the snap catches within 1.3 m)
 chk("f2 a prism on the beam but off the marker does not connect", function()
     return M().tb.prismHit == true and M().tb.connected == false end)
-put("Spl Prism", 822.0, 1.5, -25.5)
+put("Spl Prism", 823.0, 1.5, -25.5) -- 1.0 m off: the snap eases it onto the marker
 untilC("f2 on the marker the beam reaches the receiver", function() return M().tb.connected == true end, 4)
 untilC("f2 the turbine restarts", function() return M().tb.on == true end, 4)
 untilC("f2 the cage door lifts", function() return DBG.doors["Spl Cage Door"].want == true and pos("Spl Cage Door").y > 5.4 end, 6)

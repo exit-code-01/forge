@@ -106,6 +106,16 @@ def main():
         time.sleep(hold / 1000.0)
         user32.PostMessageW(hwnd, 0x0101, vk, 1 | (scan << 16) | (0xC0000000))
         print("sent", name, hold)
+    elif cmd == "mouse":
+        # mouse <l|r> [hold_ms]: a button posted to the window (no focus needed)
+        btn = sys.argv[2].lower()
+        hold = int(sys.argv[3]) if len(sys.argv) > 3 else 80
+        dn, up, mk = (0x0201, 0x0202, 1) if btn == "l" else (0x0204, 0x0205, 2)
+        user32.PostMessageW.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
+        user32.PostMessageW(hwnd, dn, mk, (360 << 16) | 640)
+        time.sleep(hold / 1000.0)
+        user32.PostMessageW(hwnd, up, 0, (360 << 16) | 640)
+        print("mouse", btn, hold)
     elif cmd == "look":
         dx, dy = int(sys.argv[2]), int(sys.argv[3])
         steps = 12

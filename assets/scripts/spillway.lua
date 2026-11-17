@@ -42,7 +42,7 @@ local FLOW = 2.4 -- the gorge current, m/s toward +z
 local HOLD = 35.0 -- seconds the sluice stays open after the plate is left
 local LV = { 0.0, -0.7, -1.4, -2.8 } -- water level for load 0, 1, 2, 3
 local SLOT_X = 800.0
-local SLOT_Z = { -7.7, -9.9, -12.1 } -- lodge slots, nearest the lip first
+local SLOT_Z = { -7.75, -10.6, -13.45 } -- lodge slots, nearest the lip first; each holds a 2.2 m log-jam raft (gaps 0.65 m)
 local MOODY_FAR = 300
 
 local PLATE = vec3(771.0, GY, -2.0)  -- the counterweight (half 1.5)
@@ -87,7 +87,7 @@ local DUSK = {
 }
 local HALL = { -- inside the turbine hall: almost nothing; SPARK's light and the beam are the hall
     fog = vec3(0.010, 0.012, 0.018), fogD = 0.014, key = vec3(0.05, 0.045, 0.05),
-    ambSky = vec3(0.020, 0.022, 0.030), ambGround = vec3(0.014, 0.014, 0.020),
+    ambSky = vec3(0.040, 0.044, 0.058), ambGround = vec3(0.028, 0.028, 0.040),
 }
 local function mix(a, b, t) return a + (b - a) * t end
 local function vmix(a, b, t) return vec3(mix(a.x, b.x, t), mix(a.y, b.y, t), mix(a.z, b.z, t)) end
@@ -232,6 +232,10 @@ end
 local function buildGround()
     -- plaza, canyon walls, the dam and its crest, the far terrace and the reservoir
     blk("Spl Plaza", 740, 860, -1.5, GY, -6, 60, "concrete", CONC)
+    -- dry paving: warm light stone with its own fill, so it never reads as the (teal) water
+    forge.scene.setTint("Spl Plaza", vec3(0.86, 0.80, 0.68))
+    forge.scene.setEmissive("Spl Plaza", vec3(0.30, 0.26, 0.18))
+    forge.scene.setMetallic("Spl Plaza", 0.0)
     blk("Spl Cliff S", 736, 864, -4, 16, 36, 62, "concrete", ROCK2)
     blk("Spl Cliff W", 730, 760, -4, 14, -200, 62, "concrete", ROCK)
     blk("Spl Cliff E", 864, 890, -4, 14, -200, 62, "concrete", ROCK)
@@ -241,7 +245,11 @@ local function buildGround()
     blk("Spl Terrace", 840, 864, -4, 9, -37, -26, "concrete", ROCK)
     blk("Spl Parapet N", 760, 864, 9, 10.1, -37, -36.6, "concrete", CONC)
     blk("Spl Parapet S", 764, 840, 9, 10.8, -28.4, -28, "concrete", CONC) -- x 760..764 is the stairs' way onto the crest
-    waterSlab("Spl Reservoir", 760, 864, -180, -37, 7.4)
+    waterSlab("Spl Reservoir", 760, 864, -180, -37, 8.6)
+    forge.scene.setTint("Spl Reservoir", vec3(0.04, 0.30, 0.36)) -- deep teal, not a sky mirror
+    forge.scene.setEmissive("Spl Reservoir", vec3(0.03, 0.20, 0.25))
+    forge.scene.setMetallic("Spl Reservoir", 0.0)
+    forge.scene.setRoughness("Spl Reservoir", 0.7)
     -- the crown stairs (x 760..764, rising north behind the crown gate) and their landing
     local rise = 8.0 / 27.0
     for i = 1, 27 do
@@ -292,6 +300,9 @@ local function buildCentre()
     waterSlab("Spl Water C", 794, 806, -15.2, -6.0, WY)
     -- the grate (visual: the lodging is script) and the culvert the water comes out of
     prop("Spl Rack", vec3(800, 0.28, -6.65), vec3(12, 1.4, 0.2), "grate", false)
+    for i = 1, 3 do -- a lodged crate drags a raft of drift logs in with it (parked in the floor until then)
+        prop("Spl Jam " .. i, vec3(800.0, -4.5, SLOT_Z[i]), vec3(2.6, 0.3, 2.2), "crate", true, nil, { kinematic = true })
+    end
     prop("Spl Culvert", vec3(800, 0.5, -15.14), vec3(5.0, 1.0, 0.12), "metal_dark", false)
     prop("Spl Outflow", vec3(800, 0.03, -14.7), vec3(5.0, 0.04, 1.2), "metal_white", false)
     forge.scene.setEmissive("Spl Outflow", vec3(0.7, 1.1, 1.5))
@@ -500,6 +511,9 @@ end
 local LANE = WATERS[2]
 local function laneHolds(p) return inRect(p, LANE.x0, LANE.x1, LANE.z0, LANE.z1) end
 
+local function setJam(slot, on) -- the raft under a lodged crate: walkable, so a 0.7 m crate is not the only footing
+    forge.scene.setPosition("Spl Jam " .. slot, vec3(SLOT_X, on and 0.0 or -4.5, SLOT_Z[slot]))
+end
 local function lodgedCount()
     local n = 0
     for _ in pairs(M().lane.lodged) do n = n + 1 end
@@ -517,7 +531,7 @@ local function updateLane(dt, pp)
     -- the player is pushed in the lane: hard in the air, a nudge while standing on a lodged crate
     if laneHolds(pp) and pp.y < 3.2 then
         local standing = forge.player.grounded()
-        forge.player.push(vec3(0, 0, standing and 0.7 or FLOW))
+        forge.player.push(vec3(0, 0, standing and 0.7 or 1.4)) -- gentler than the crates' flow: a jump must beat it
     end
     for _, c in ipairs(CRATES) do
         local name = c.name
@@ -530,6 +544,7 @@ local function updateLane(dt, pp)
             local dx, dz = at.x - SLOT_X, at.z - tz
             if held(name) or dx * dx + dz * dz > 1.0 then
                 lane.lodged[name] = nil
+                setJam(slot, false)
                 forge.log("lane: " .. name .. " left slot " .. slot)
             else
                 forge.scene.setPosition(name, vec3(SLOT_X, 0.0, tz))
@@ -546,7 +561,7 @@ local function updateLane(dt, pp)
             local tx = target and SLOT_X or (at.x < SLOT_X and 796.4 or 803.6)
             if target then -- a free slot nearer the lip than a lodged crate: go round the row first
                 for j = 1, 3 do
-                    if not slotFree(j) and SLOT_Z[j] > at.z - 0.6 and SLOT_Z[j] < SLOT_Z[target] + 0.6 then
+                    if not slotFree(j) and SLOT_Z[j] > at.z - 1.5 and SLOT_Z[j] < SLOT_Z[target] + 1.5 then
                         tx = at.x < SLOT_X and 796.4 or 803.6
                     end
                 end
@@ -556,6 +571,7 @@ local function updateLane(dt, pp)
             -- lodge in the first free slot (nearest the lip first)
             if target and at.z >= SLOT_Z[target] - 0.3 then
                 lane.lodged[name] = target
+                setJam(target, true)
                 forge.scene.setPosition(name, vec3(SLOT_X, 0.0, SLOT_Z[target]))
                 forge.physics.set_velocity(id, vec3(0, 0, 0))
                 forge.audio.play_at("assets/sounds/thunk.wav", at, 0.9, 0.9)
@@ -700,7 +716,7 @@ local function updateTurbine(dt, pp)
     local dp = forge.scene.getPosition(K.drone.name)
     m.sparkLit = inHall(dp)
     if m.sparkLit then
-        forge.render.light("spl_spark", dp, vec3(2.7, 2.4, 1.7), 9.0)
+        forge.render.light("spl_spark", dp, vec3(4.2, 3.7, 2.5), 11.0)
     else
         forge.render.clear_light("spl_spark")
     end
@@ -709,8 +725,8 @@ local function updateTurbine(dt, pp)
     local tr = K.crateTrack[PRISM.name]
     local dx, dz = pat.x - MARK.x, pat.z - MARK.z
     local dh = math.sqrt(dx * dx + dz * dz)
-    if not held(PRISM.name) and tr and tr.speed < 1.5 and dh < 0.7 and dh > 0.005 then
-        pat = K.moveTowards(pat, vec3(MARK.x, pat.y, MARK.z), 1.5 * dt) -- forgiveness: ease onto the marker
+    if not held(PRISM.name) and tr and tr.speed < 1.5 and dh < 1.3 and dh > 0.005 then
+        pat = K.moveTowards(pat, vec3(MARK.x, pat.y, MARK.z), 2.5 * dt) -- forgiveness: ease onto the marker
         forge.scene.setPosition(PRISM.name, pat)
         local pid = forge.scene.bodyId(PRISM.name)
         if pid ~= 0 then forge.physics.set_velocity(pid, vec3(0, 0, 0)) end
@@ -1207,6 +1223,7 @@ function Z.resetArea(cp)
     for _, c in ipairs(PROPS) do
         if c.area == area and not m.pinned[c.name] then
             m.lane.lodged[c.name] = nil
+            for i = 1, 3 do setJam(i, false) end
             K.sendHome(c)
             n = n + 1
         end
@@ -1218,6 +1235,7 @@ end
 -- resetGame: water up, keys loose, the hall dark, the gate down, the cart dead.
 function Z.reset()
     SPILLWAY_MEM = freshMem()
+    for i = 1, 3 do setJam(i, false) end
     if not SPILLWAY_BUILT then return end
     local m = M()
     setLevel("Spl Water W", WY)
