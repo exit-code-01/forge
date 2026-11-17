@@ -956,3 +956,20 @@ steady distance with no snag. NOT verified: jumping onto the rocks or the
 skins' sloped parts by hand, a mirrored scale, thrown props against the
 skins beyond what the sequencer's bell and crate steps cover, and the ground
 itself: floors, stairs and ledges are still boxes.
+
+ADDENDUM to ADR-032, same day: the floor and the stairs. `srf_terr_ground`
+(tools/gen_ground.py, 7,890 triangles) is now the valley floor's collider and
+visual: exactly y = 0 inside the play area, so nothing that stands on the
+ground moved, with scree banks up to 0.85 m in the last 4 m before the cliff
+ring (suppressed at the bell lane, the east terraces, the head-house, the
+mesa and both ravine edges), holes for the ravine and the lift pit, and dirt
+paths between the landmarks. When it is loaded, surface.lua sinks its five
+ground boxes 6 cm to act as backing. `srf_terr_ramps` (tools/gen_ramps.py,
+360 triangles) lays a walkable ramp over each stair run (26.6 and 22.6
+degrees); the step boxes stay underneath. Both fall back to the old boxes if
+the model is missing. Verified: `test_surface` 126 of 126 on the mesh floor,
+no validation messages, Surface frame 42.6 ms average; a real W key walks up
+and down the ledge ramp and up the terrace ramp and onto a scree bank. NOT
+verified: props thrown or dropped on the ramps (they will slide on a 26
+degree slope where they used to rest on a step), SPARK's flight over the
+banks, and the lookout, whose 1 m jump ledges are deliberately still boxes.

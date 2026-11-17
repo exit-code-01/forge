@@ -53,9 +53,16 @@ function SURFACE_DRESS(K)
     -- (400, 0, 0): spawn there, scale 1, no yaw. No colliders: the boxes
     -- stay the colliders, and below 2.7 m the skins keep within 0.21 m of them.
     local skinned = forge.scene.has_model("srf_terr_cliffs")
+    local ROCKFILL = vec3(0.115, 0.103, 0.091) -- shade fill, as surface.lua
     for _, m in ipairs({ "srf_terr_cliffs", "srf_terr_ravine", "srf_terr_outcrops" }) do
-        put(m, 400, 0, 0, 0, 1, "mesh", nil, vec3(0.115, 0.103, 0.091)) -- shade fill, as surface.lua
+        put(m, 400, 0, 0, 0, 1, "mesh", nil, ROCKFILL)
     end
+    -- the valley floor (tools/gen_ground.py): flat at y = 0 where things
+    -- stand, scree banks at the cliff feet, dirt paths between the landmarks.
+    -- surface.lua sinks its ground boxes under it. And the two stair runs as
+    -- walkable ramps (tools/gen_ramps.py) laid over the step boxes.
+    put("srf_terr_ground", 400, 0, 0, 0, 1, "mesh", nil, vec3(0.05, 0.062, 0.035))
+    put("srf_terr_ramps", 400, 0, 0, 0, 1, "mesh", nil, vec3(0.09, 0.076, 0.058))
 
     -- ---- cliff faces: one 6 m wall tile per cell on the innermost tier, a
     -- hand's width proud of the box face (the boxes stay the colliders).

@@ -196,12 +196,15 @@ local ROCK3 = vec3(0.56, 0.50, 0.45)
 local DIRT = vec3(0.78, 0.66, 0.50)
 
 local function buildGround()
-    -- valley floor, with holes for the ravine (x 366..378) and the lift pit
-    blk("Srf Ground W", 340, 366, -2, 0, -60, 60, "concrete", GRASS)
-    blk("Srf Ground N", 378, 460, -2, 0, -60, 34, "concrete", GRASS)
-    blk("Srf Ground S", 378, 460, -2, 0, 39, 60, "concrete", GRASS)
-    blk("Srf Ground SW", 378, 398.5, -2, 0, 34, 39, "concrete", GRASS)
-    blk("Srf Ground SE", 401.5, 460, -2, 0, 34, 39, "concrete", GRASS)
+    -- valley floor, with holes for the ravine (x 366..378) and the lift pit.
+    -- When the ground mesh is loaded (tools/gen_ground.py, ADR-032) IT is the
+    -- floor at y = 0 and these boxes sink 6 cm to become its backing.
+    local gy = forge.scene.has_model("srf_terr_ground") and -0.06 or 0
+    blk("Srf Ground W", 340, 366, -2, gy, -60, 60, "concrete", GRASS)
+    blk("Srf Ground N", 378, 460, -2, gy, -60, 34, "concrete", GRASS)
+    blk("Srf Ground S", 378, 460, -2, gy, 39, 60, "concrete", GRASS)
+    blk("Srf Ground SW", 378, 398.5, -2, gy, 34, 39, "concrete", GRASS)
+    blk("Srf Ground SE", 401.5, 460, -2, gy, 34, 39, "concrete", GRASS)
     -- the ravine: sheer walls into the dark, a floor far below (visual only)
     blk("Srf Ravine W", 362, 366, -26, -2, -60, 60, "concrete", ROCK3)
     blk("Srf Ravine E", 378, 382, -26, -2, -60, 60, "concrete", ROCK3)

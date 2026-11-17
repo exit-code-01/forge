@@ -55,3 +55,8 @@ Machine or permission blockers go here (rule 10 in CLAUDE.md).
 - Quest-giver model: `assets/models/wren_bot.glb`, an original robot built and animated by `tools/gen_wren.py` (headless Blender 5.3; 2,040 triangles, 15 joints, clips Idle / Interact / Cheer). surface.lua spawns it when present, the knight otherwise. Ledger row added.
 - Seen in the engine: imports (15 joints, 3 clips), faces the player, all three clips play, E Talk prompt shows. test_surface 126/126 with it, no validation messages. test_all and test_mesh not re-run for this change (Lua + one asset).
 - Not committed yet.
+
+### 14:40 owner/O1-O2 — STATUS
+- Floor and stairs are meshes now: `srf_terr_ground` (7,890 triangles, the floor collider at y = 0, scree banks at the cliff feet, dirt paths) and `srf_terr_ramps` (ramps over both stair runs). Generators: tools/gen_ground.py, tools/gen_ramps.py (written by two cheaper-model subagents to a spec, checked offline by them and in the engine by the owner-side agent). surface.lua sinks the ground boxes 6 cm when the ground mesh is loaded.
+- As run on this state: test_surface 126/126, no validation messages, Surface frame 42.6 ms avg; keyboard walk up/down the ramps and onto a bank works. test_all 51/51 and test_mesh 16/16 on this state too.
+- Heads-up C1: the Surface now has about 24,000 collider/visual triangles of terrain in the shadow pass.

@@ -100,7 +100,8 @@ filled from the ADR log so the ledger is complete.
   import path. Est. 1 d (rotated boxes) + 2-3 d (heightfield + script API).
   PARTLY CLOSED by ADR-032: static triangle-mesh colliders
   (`collider = "mesh"`) and a spawn `yaw` for boxes and meshes. Still open:
-  pitch/roll on colliders, a heightfield, and moving the Surface off its boxes.
+  pitch/roll on colliders and a heightfield. The Surface floor, stair runs, cliffs and rocks
+  are mesh colliders now; terraces, the lookout and built structures stay boxes.
 - **Ambient light is fixed in the renderer** (found 2026-11-17, the Surface) —
   hemisphere ambient is a constant plus 2.8 % of the key light
   (`kAmbientSky*` in Renderer.cpp), so outdoors a face in shadow is about
