@@ -51,6 +51,15 @@ Model uploadModel(Renderer& renderer, const assets::ModelData& data, std::string
                            ? imageTextures.at(static_cast<size_t>(material.image))
                            : Renderer::whiteTexture();
         model.parts.push_back(part);
+        if (!part.skinned) { // retained for mesh colliders (ADR-032)
+            const auto base = static_cast<uint32_t>(model.collisionVertices.size());
+            for (const Vertex& v : submesh.mesh.vertices) {
+                model.collisionVertices.push_back(v.position);
+            }
+            for (const uint32_t index : submesh.mesh.indices) {
+                model.collisionIndices.push_back(base + index);
+            }
+        }
     }
     return model;
 }

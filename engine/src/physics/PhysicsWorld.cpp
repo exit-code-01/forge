@@ -20,11 +20,14 @@
 #include <Jolt/Physics/Collision/RayCast.h>
 #include <Jolt/Physics/Collision/Shape/BoxShape.h>
 #include <Jolt/Physics/Collision/Shape/CapsuleShape.h>
+#include <Jolt/Physics/Collision/Shape/MeshShape.h>
 #include <Jolt/Physics/PhysicsSettings.h>
 #include <Jolt/Physics/PhysicsSystem.h>
 #include <Jolt/RegisterTypes.h>
 
 #include <algorithm>
+#include <array>
+#include <cmath>
 #include <memory>
 #include <thread>
 #include <unordered_map>
@@ -165,9 +168,13 @@ BodyId PhysicsWorld::addBox(const BoxDesc& desc) {
     JPH::Ref<JPH::BoxShape> shape =
         new JPH::BoxShape(JPH::Vec3(halfExtents.x, halfExtents.y, halfExtents.z), convexRadius);
     shape->SetDensity(desc.density);
+    const JPH::Quat rotation =
+        desc.yawDeg != 0.0f
+            ? JPH::Quat::sRotation(JPH::Vec3::sAxisY(), JPH::DegreesToRadians(desc.yawDeg))
+            : JPH::Quat::sIdentity();
     JPH::BodyCreationSettings settings(
-        shape, JPH::RVec3(desc.position.x, desc.position.y, desc.position.z),
-        JPH::Quat::sIdentity(), motion, isStatic ? layers::kNonMoving : layers::kMoving);
+        shape, JPH::RVec3(desc.position.x, desc.position.y, desc.position.z), rotation, motion,
+        isStatic ? layers::kNonMoving : layers::kMoving);
     settings.mRestitution = desc.restitution;
     settings.mFriction = desc.friction;
     if (desc.lockRotation) {
@@ -178,6 +185,83 @@ BodyId PhysicsWorld::addBox(const BoxDesc& desc) {
     const JPH::BodyID id = m_impl->system->GetBodyInterface().CreateAndAddBody(
         settings, isStatic ? JPH::EActivation::DontActivate : JPH::EActivation::Activate);
     return {id.GetIndexAndSequenceNumber()};
+}
+
+std::optional<BodyId> PhysicsWorld::createStaticMesh(const std::vector<glm::vec3>& vertices,
+                                                     const std::vector<uint32_t>& indices,
+                                                     const glm::vec3& position,
+                                                     const glm::quat& rotation,
+                                                     const glm::vec3& scale, float friction,
+                                                     float restitution) {
+    // Weld coincident vertices (0.1 mm grid). Exported models duplicate a
+    // vertex per face (flat shading, UV seams) and per part; Jolt only
+    // finds a mesh's INACTIVE internal edges through shared indices, and an
+    // active internal edge is exactly the "character trips on a flat seam"
+    // ghost contact.
+    struct KeyHash {
+        size_t operator()(const std::array<int64_t, 3>& k) const noexcept {
+            const auto h = [](int64_t v) { return std::hash<int64_t>{}(v); };
+            return h(k[0]) ^ (h(k[1]) * 0x9E3779B97F4A7C15ULL) ^ (h(k[2]) * 0xC2B2AE3D27D4EB4FULL);
+        }
+    };
+    std::unordered_map<std::array<int64_t, 3>, uint32_t, KeyHash> welded;
+    welded.reserve(vertices.size());
+    JPH::VertexList joltVertices;
+    std::vector<uint32_t> remap(vertices.size(), 0);
+    for (size_t i = 0; i < vertices.size(); ++i) {
+        const glm::vec3 p = vertices[i] * scale;
+        const std::array<int64_t, 3> key{std::llround(static_cast<double>(p.x) * 1e4),
+                                         std::llround(static_cast<double>(p.y) * 1e4),
+                                         std::llround(static_cast<double>(p.z) * 1e4)};
+        const auto [it, inserted] =
+            welded.try_emplace(key, static_cast<uint32_t>(joltVertices.size()));
+        if (inserted) {
+            joltVertices.push_back(JPH::Float3(p.x, p.y, p.z));
+        }
+        remap[i] = it->second;
+    }
+    // A mirroring scale turns CCW triangles CW: swap two corners back.
+    const bool mirrored = scale.x * scale.y * scale.z < 0.0f;
+    JPH::IndexedTriangleList triangles;
+    triangles.reserve(indices.size() / 3);
+    for (size_t i = 0; i + 2 < indices.size(); i += 3) {
+        if (indices[i] >= vertices.size() || indices[i + 1] >= vertices.size() ||
+            indices[i + 2] >= vertices.size()) {
+            continue;
+        }
+        const uint32_t a = remap[indices[i]];
+        const uint32_t b = remap[indices[i + (mirrored ? 2 : 1)]];
+        const uint32_t c = remap[indices[i + (mirrored ? 1 : 2)]];
+        triangles.emplace_back(a, b, c);
+    }
+    const size_t welds = vertices.size() - joltVertices.size();
+
+    JPH::MeshShapeSettings meshSettings(std::move(joltVertices), std::move(triangles));
+    meshSettings.SetEmbedded(); // stack-owned; only the built shape is ref-counted
+    if (meshSettings.mIndexedTriangles.empty()) { // Sanitize() dropped every degenerate
+        FORGE_ERROR("physics: static mesh has no usable triangles ({} indices)", indices.size());
+        return std::nullopt;
+    }
+    const JPH::ShapeSettings::ShapeResult result = meshSettings.Create();
+    if (result.HasError()) {
+        FORGE_ERROR("physics: static mesh rejected: {}", result.GetError().c_str());
+        return std::nullopt;
+    }
+    JPH::BodyCreationSettings settings(
+        result.Get(), JPH::RVec3(position.x, position.y, position.z),
+        JPH::Quat(rotation.x, rotation.y, rotation.z, rotation.w).Normalized(),
+        JPH::EMotionType::Static, layers::kNonMoving);
+    settings.mFriction = friction;
+    settings.mRestitution = restitution;
+    const JPH::BodyID id = m_impl->system->GetBodyInterface().CreateAndAddBody(
+        settings, JPH::EActivation::DontActivate);
+    if (id.IsInvalid()) {
+        FORGE_ERROR("physics: static mesh body not created (body cap reached?)");
+        return std::nullopt;
+    }
+    FORGE_INFO("physics: static mesh collider, {} triangles, {} vertices ({} welded)",
+               meshSettings.mIndexedTriangles.size(), meshSettings.mTriangleVertices.size(), welds);
+    return BodyId{id.GetIndexAndSequenceNumber()};
 }
 
 void PhysicsWorld::moveKinematic(BodyId id, const glm::vec3& targetPosition) {

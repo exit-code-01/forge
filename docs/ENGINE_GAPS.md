@@ -38,6 +38,9 @@ filled from the ADR log so the ledger is complete.
 | 14   | A texture budget that degrades | Cap 64 -> 256; a full table logs once and draws white (`Renderer::whiteTexture()`); a pack's shared atlas uploads once (`TextureCache`) | — |
 | 14   | Skeletal animation + blending | glTF skins and clips (`anim::Skeleton`, `SkeletalClip`; LINEAR/STEP); `anim::Animator` (loop, speed, timed cross-fade); GPU skinning via a second vertex stream + per-frame palette storage buffer (2048 joints); skinned shadow pass; rigid parts ride their nodes. `forge.anim.play/clips/time`. Closes the Open entry below | — |
 | 14   | Sky behind open-topped rooms | `Renderer::setSky(Sky)`; `forge.render.set_sky{...}`: gradient + sun disc on the key light, optional equirect 8-bit panorama, fogged at the far plane; dark indoor default | — |
+| 15   | Script modules (a location per file) | `forge.include(path)` -> bool: protected load into the same Lua state, logged errors, include-cycle guard; `ScriptEngine::includedFiles()`; the host watches every included file and re-runs the MAIN script when one changes (ADR-031) | 0.25 d |
+| 15   | An interact verb, missions on the HUD, one line of dialogue | `forge.hud.set_prompt(text)` (key cap under the crosshair), `forge.hud.set_mission(title, {lines})` (top-right panel, `[x] ` / `[ ] ` lines, also on the pause screen), `forge.hud.say(speaker, text, seconds)`, `forge.hud.set_fade(alpha)`; `forge.game.dev()`. E is the interact key; the debug crate rain is dev-only | 0.5 d |
+| 15   | Outdoor location support | `forge.render.set_view_distance(m)` (camera far plane, 20-1000 m); `forge.player.set_yaw(yaw[, pitch])` (face the valley after a location cut); `forge.scene.has_model(name)` (dressing skips assets that failed to import instead of drawing the cube fallback) | 0.1 d |
 
 ## Considered and cut (week 12 — cheaper answers existed)
 
@@ -89,3 +92,38 @@ filled from the ADR log so the ledger is complete.
   light frustum to whole-texel steps would stop the shimmer. Not yet costed.
 - **Renderer items still missing from the graphics bar** — SSAO and decals.
   Neither is in the engine yet, and neither is scheduled. Not yet costed.
+- **Slopes, rotated colliders, terrain** (found week 15, the Surface) —
+  colliders are axis-aligned boxes; `setRotation` is visual only, so every
+  rise on the Surface is 0.25-0.3 m stairs or 1 m jump ledges, and cliffs are
+  stacked boxes. Needs a rotation on spawn for static/dynamic boxes (Jolt
+  supports it) and a heightfield shape (Jolt `HeightFieldShape`) with an
+  import path. Est. 1 d (rotated boxes) + 2-3 d (heightfield + script API).
+  PARTLY CLOSED by ADR-032: static triangle-mesh colliders
+  (`collider = "mesh"`) and a spawn `yaw` for boxes and meshes. Still open:
+  pitch/roll on colliders, a heightfield, and moving the Surface off its boxes.
+- **Ambient light is fixed in the renderer** (found 2026-11-17, the Surface) —
+  hemisphere ambient is a constant plus 2.8 % of the key light
+  (`kAmbientSky*` in Renderer.cpp), so outdoors a face in shadow is about
+  1/28 of a sunlit one and reads black. Worked round in Lua: tinted terrain
+  blocks and the rock skins carry a small emissive "shade fill"
+  (`SHADE_FILL` in surface.lua), which also brightens lit faces a little and
+  ignores normals. Wants `forge.render.set_ambient(sky, ground)` (optional,
+  default = today's values), then the fill can go. Est. 0.25 d. Renderer lane.
+- **Level streaming / culling** (week 15) — the facility and the Surface are
+  one always-loaded world 400 m apart; every entity draws every frame (no
+  frustum or distance culling, shadows included). Measured cost is flat at
+  ~500 entities (ADR-031), but a third location will want culling first
+  (1 d), streaming later (not costed).
+- **Trigger volumes** (week 15) — every "player entered X" (areas, the lift,
+  the arc yard, interact range) is per-frame Lua position math. A
+  `forge.physics.trigger(name, box)` with enter/leave edges would remove it.
+  Est. 0.5 d.
+- **Outdoor shadows and ambient** (week 15) — the shadow box is +-16 m around
+  the camera, so outdoor shadows stop 16 m away; ambient light is derived
+  from the key light only, so the sky's colour never reaches shadowed faces.
+  Cascades (1-2 d) and a sky-tinted ambient term (0.25 d).
+- **Alpha-tested foliage** — see "Alpha modes" above; the Surface kits were
+  chosen solid for that reason (no cards).
+- **Interact occlusion** (week 15) — the E prompt uses distance + facing, not
+  line of sight; fine for an NPC and a console in the open, wrong through
+  walls. A raycast in `Interact.update` (Lua) closes it if a case appears.

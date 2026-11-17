@@ -56,6 +56,11 @@ struct Model {
     // entity owns an anim::Animator over them. Null/empty for static models.
     std::shared_ptr<const anim::Skeleton> skeleton;
     std::shared_ptr<const std::vector<anim::SkeletalClip>> clips;
+    // CPU copy for mesh colliders (ADR-032): every STATIC part's triangles,
+    // merged, in model space with the import correction baked in — exactly
+    // the geometry the parts draw. Empty for skinned parts and the cube.
+    std::vector<glm::vec3> collisionVertices;
+    std::vector<uint32_t> collisionIndices;
 };
 
 // Per-entity look layered over a model (the host's MeshRendererC carries it).

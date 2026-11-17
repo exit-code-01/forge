@@ -26,6 +26,7 @@
 #include <ImGuizmo.h>
 
 #include <glm/gtc/matrix_transform.hpp>
+#include <glm/gtc/quaternion.hpp>
 #include <glm/vec3.hpp>
 
 #include <algorithm>
@@ -264,6 +265,14 @@ glm::mat4 trs(const TransformC& t) {
     return glm::scale(m, t.scale);
 }
 
+// trs()'s rotation (Y, then X, then Z) as a quaternion: colliders that turn
+// with the visual (mesh colliders, ADR-032) must use exactly this order.
+glm::quat trsRotation(const TransformC& t) {
+    return glm::angleAxis(glm::radians(t.eulerDeg.y), glm::vec3(0.0f, 1.0f, 0.0f)) *
+           glm::angleAxis(glm::radians(t.eulerDeg.x), glm::vec3(1.0f, 0.0f, 0.0f)) *
+           glm::angleAxis(glm::radians(t.eulerDeg.z), glm::vec3(0.0f, 0.0f, 1.0f));
+}
+
 // assets/models/import.ini (ADR-030): per-model import corrections, one
 // [stem] section per model — `scale = 0.01`, `rotate = -90 0 0` (degrees,
 // X then Y then Z), `hide = NodeA, NodeB` (accessory meshes to skip). Missing
@@ -410,6 +419,87 @@ private:
     std::filesystem::path m_path;
     std::filesystem::file_time_type m_lastWrite;
 };
+
+// ---- ADR-031 HUD pieces. The script owns the words; these own the pixels.
+// Prompt: "E  Talk" -> the first word sits in an orange key cap.
+void drawPrompt(ImDrawList* draw, ImVec2 at, const std::string& text) {
+    const auto split = text.find(' ');
+    const std::string key = text.substr(0, split);
+    std::string rest = split == std::string::npos ? std::string() : text.substr(split);
+    rest.erase(0, rest.find_first_not_of(' '));
+    const ImVec2 ks = ImGui::CalcTextSize(key.c_str());
+    const ImVec2 rs = ImGui::CalcTextSize(rest.c_str());
+    const float capW = std::max(ks.x + 10.0f, ks.y + 6.0f);
+    const float total = capW + (rest.empty() ? 0.0f : 8.0f + rs.x);
+    const float x0 = at.x - total * 0.5f;
+    draw->AddRectFilled({x0 - 8.0f, at.y - 5.0f}, {x0 + total + 8.0f, at.y + ks.y + 5.0f},
+                        IM_COL32(0, 0, 0, 120), 5.0f);
+    draw->AddRect({x0, at.y - 2.0f}, {x0 + capW, at.y + ks.y + 2.0f},
+                  IM_COL32(255, 170, 60, 240), 3.0f, 0, 1.5f);
+    draw->AddText({x0 + (capW - ks.x) * 0.5f, at.y}, IM_COL32(255, 190, 90, 255), key.c_str());
+    if (!rest.empty()) {
+        draw->AddText({x0 + capW + 8.0f, at.y}, IM_COL32(255, 255, 255, 230), rest.c_str());
+    }
+}
+
+// Mission panel, right-aligned at (right, top): title + objective lines.
+// "[x] " lines draw dimmed green with a filled box, "[ ] " white with an
+// open box; anything else is plain grey text.
+void drawMissionPanel(ImDrawList* draw, float right, float top, const std::string& title,
+                      const std::vector<std::string>& lines) {
+    if (title.empty()) {
+        return;
+    }
+    constexpr float kPad = 10.0f;
+    constexpr float kBox = 9.0f;
+    constexpr float kIndent = kBox + 7.0f;
+    const auto body = [](const std::string& l) {
+        return (l.rfind("[x] ", 0) == 0 || l.rfind("[ ] ", 0) == 0) ? l.substr(4) : l;
+    };
+    float width = ImGui::CalcTextSize(title.c_str()).x;
+    for (const std::string& l : lines) {
+        width = std::max(width, kIndent + ImGui::CalcTextSize(body(l).c_str()).x);
+    }
+    const float lineH = ImGui::GetTextLineHeight() + 5.0f;
+    const ImVec2 a{right - width - 2.0f * kPad, top};
+    const ImVec2 b{right, top + 2.0f * kPad + lineH * static_cast<float>(lines.size() + 1)};
+    draw->AddRectFilled(a, b, IM_COL32(0, 0, 0, 115), 5.0f);
+    draw->AddText({a.x + kPad, a.y + kPad}, IM_COL32(255, 200, 110, 240), title.c_str());
+    float y = a.y + kPad + lineH + 2.0f;
+    for (const std::string& l : lines) {
+        const bool done = l.rfind("[x] ", 0) == 0;
+        const bool open = l.rfind("[ ] ", 0) == 0;
+        const float by = y + (ImGui::GetTextLineHeight() - kBox) * 0.5f;
+        const float bx = a.x + kPad;
+        ImU32 col = IM_COL32(200, 200, 200, 170);
+        if (done) {
+            draw->AddRectFilled({bx, by}, {bx + kBox, by + kBox}, IM_COL32(90, 200, 120, 190),
+                                2.0f);
+            col = IM_COL32(120, 200, 140, 165);
+        } else if (open) {
+            draw->AddRect({bx, by}, {bx + kBox, by + kBox}, IM_COL32(255, 255, 255, 210), 2.0f,
+                          0, 1.3f);
+            col = IM_COL32(255, 255, 255, 225);
+        }
+        draw->AddText({bx + kIndent, y}, col, body(l).c_str());
+        y += lineH;
+    }
+}
+
+// One subtitle line, bottom-centre: speaker in amber, then the text.
+void drawSayLine(ImDrawList* draw, ImVec2 display, const std::string& speaker,
+                 const std::string& text, float alpha) {
+    const std::string who = speaker.empty() ? std::string() : speaker + "  ";
+    const ImVec2 ws = ImGui::CalcTextSize(who.c_str());
+    const ImVec2 ts = ImGui::CalcTextSize(text.c_str());
+    const float x0 = (display.x - ws.x - ts.x) * 0.5f;
+    const float y0 = display.y - 92.0f;
+    const auto a = [alpha](float v) { return static_cast<int>(v * alpha); };
+    draw->AddRectFilled({x0 - 12.0f, y0 - 6.0f}, {x0 + ws.x + ts.x + 12.0f, y0 + ts.y + 6.0f},
+                        IM_COL32(0, 0, 0, a(150.0f)), 5.0f);
+    draw->AddText({x0, y0}, IM_COL32(255, 190, 90, a(255.0f)), who.c_str());
+    draw->AddText({x0 + ws.x, y0}, IM_COL32(255, 255, 255, a(240.0f)), text.c_str());
+}
 
 } // namespace
 
@@ -560,11 +650,37 @@ int main() {
             if (renderer && texture.value == laserTexture.value && texture.value != 0) {
                 mrc.emissive = {6.0f, 0.5f, 0.35f};
             }
-            if (halfExtents != glm::vec3(0.0f)) {
+            if (options != nullptr) {
+                t.eulerDeg.y = options->yawDeg; // spawn yaw: visual + collider (ADR-032)
+            }
+            // collider = "mesh" (ADR-032): the model's own triangles, static.
+            bool meshBody = false;
+            if (options != nullptr && options->meshCollider) {
+                const std::string& who = scene.get<Name>(e).value;
+                const forge::Model* src = model < models.size() ? &models[model] : nullptr;
+                if (dynamic || options->kinematic) {
+                    FORGE_WARN("spawn '{}': mesh colliders are static only, using a box", who);
+                } else if (src == nullptr || src->collisionIndices.empty()) {
+                    FORGE_WARN("spawn '{}': model '{}' has no static triangles, using a box", who,
+                               src != nullptr ? src->name : std::string("?"));
+                } else if (const auto body = physics.createStaticMesh(
+                               src->collisionVertices, src->collisionIndices, position,
+                               trsRotation(t), scale, options->friction, restitution)) {
+                    scene.emplace<BodyC>(e, BodyC{*body, false, false});
+                    if (spawnRegisterHook) {
+                        spawnRegisterHook(body->value, e);
+                    }
+                    meshBody = true;
+                } else {
+                    FORGE_WARN("spawn '{}': mesh collider failed, using a box", who);
+                }
+            }
+            if (!meshBody && halfExtents != glm::vec3(0.0f)) {
                 forge::BoxDesc desc;
                 desc.halfExtents = halfExtents;
                 desc.position = position;
                 desc.restitution = restitution;
+                desc.yawDeg = t.eulerDeg.y;
                 const bool kinematic = options != nullptr && options->kinematic && !dynamic;
                 desc.type = dynamic     ? forge::BodyType::Dynamic
                             : kinematic ? forge::BodyType::Kinematic
@@ -757,6 +873,20 @@ int main() {
         enum class GameState { Title, Playing, Paused, Won };
         GameState gameState = autoPlay ? GameState::Playing : GameState::Title;
         std::string hudHint; // per-room objective line, set by scene.lua
+        // Location/mission pass (ADR-031): interact prompt, mission panel,
+        // one subtitle line, a scene fade and the view distance — all
+        // script-driven, drawn here.
+        std::string hudPrompt;
+        std::string missionTitle;
+        std::vector<std::string> missionLines;
+        struct SayLine {
+            std::string speaker;
+            std::string text;
+            float left = 0.0f;
+            float total = 1.0f;
+        } sayLine;
+        float fadeAlpha = 0.0f;
+        float viewDistance = 100.0f;
 
         // Week 10 (ship): user settings + run progress survive restarts.
         GameSettings settings = loadSettings(kSettingsPath);
@@ -958,6 +1088,9 @@ int main() {
             }
             return scene.get<Name>(it->second).value;
         };
+        script.onHasModel = [&](const std::string& model) {
+            return modelByName.find(model) != modelByName.end();
+        };
         script.onBodyId = [&](const std::string& name) -> uint32_t {
             const auto e = findByName(name);
             if (!scene.alive(e)) {
@@ -1125,8 +1258,27 @@ int main() {
                 saveSettings(kSettingsPath, settings);
             }
         };
+        // Location/mission pass (ADR-031).
+        script.onSetPrompt = [&](const std::string& text) { hudPrompt = text; };
+        script.onSetMission = [&](const std::string& title, const std::vector<std::string>& lines) {
+            missionTitle = title;
+            missionLines = lines;
+        };
+        script.onSay = [&](const std::string& speaker, const std::string& text, float seconds) {
+            sayLine = {speaker, text, std::max(seconds, 0.1f), std::max(seconds, 0.1f)};
+        };
+        script.onSetFade = [&](float alpha) { fadeAlpha = std::clamp(alpha, 0.0f, 1.0f); };
+        script.onIsDev = [&]() { return devMode; };
+        script.onSetViewDistance = [&](float meters) {
+            viewDistance = std::clamp(meters, 20.0f, 1000.0f);
+        };
+        script.onSetPlayerYaw = [&](float yawDeg, float pitchDeg) {
+            player.yaw = yawDeg;
+            player.pitch = std::clamp(pitchDeg, -89.0f, 89.0f);
+        };
         script.bindScene();
-        script.runFile("assets/scripts/scene.lua");
+        const std::string mainScript = "assets/scripts/scene.lua";
+        script.runFile(mainScript);
 
         // Editor state: selection, simulation control, orbit camera.
         forge::ecs::Entity selected = forge::ecs::kNullEntity;
@@ -1141,7 +1293,19 @@ int main() {
         // assets/scripts/scene.lua while this runs — changes land in ~0.5 s.
         FileWatcher crateWatch{"assets/textures/crate.png"};
         FileWatcher torusWatch{"assets/models/torus.obj"};
-        FileWatcher scriptWatch{"assets/scripts/scene.lua"};
+        FileWatcher scriptWatch{mainScript};
+        // Script modules (ADR-031): every forge.include'd file is watched too.
+        // A changed module re-runs the MAIN script, which re-includes it —
+        // modules extend the main script's tables, so a lone re-run would
+        // append its data twice.
+        std::vector<FileWatcher> includeWatches;
+        const auto syncIncludeWatches = [&]() {
+            const auto& files = script.includedFiles();
+            while (includeWatches.size() < files.size()) {
+                includeWatches.emplace_back(files[includeWatches.size()]);
+            }
+        };
+        syncIncludeWatches();
 
         bool jointBudgetWarned = false;
         auto lastTime = std::chrono::steady_clock::now();
@@ -1202,6 +1366,7 @@ int main() {
             lastTime = now;
 
             forge::Camera camera{};
+            camera.farPlane = viewDistance; // script-set (outdoor locations, ADR-031)
             bool aimGrabbable = false; // crosshair affordance: "this will grab"
             if (playMode) {
                 // ---- First-person: mouse-look + WASD through the capsule.
@@ -1547,13 +1712,32 @@ int main() {
                                             IM_COL32(0, 0, 0, 90), 4.0f);
                         draw->AddText(at, IM_COL32(255, 255, 255, 205), hudHint.c_str());
                     }
+                    // ---- ADR-031 HUD: fade (behind every HUD element), interact
+                    // prompt under the crosshair, mission panel top-right, one
+                    // subtitle line bottom-centre.
+                    if (fadeAlpha > 0.001f) {
+                        ImGui::GetBackgroundDrawList()->AddRectFilled(
+                            {0.0f, 0.0f}, io.DisplaySize,
+                            IM_COL32(0, 0, 0, static_cast<int>(255.0f * fadeAlpha)));
+                    }
+                    if (!hudPrompt.empty()) {
+                        drawPrompt(draw, {center.x, center.y + 44.0f}, hudPrompt);
+                    }
+                    drawMissionPanel(draw, io.DisplaySize.x - 12.0f, 12.0f, missionTitle,
+                                     missionLines);
+                    if (sayLine.left > 0.0f) {
+                        drawSayLine(draw, io.DisplaySize, sayLine.speaker, sayLine.text,
+                                    std::clamp(sayLine.left / 0.4f, 0.0f, 1.0f));
+                        sayLine.left -= simRun ? dt : 0.0f;
+                    }
                     // Context-sensitive legend: the verbs that apply right now.
                     draw->AddText({12.0f, io.DisplaySize.y - 26.0f}, IM_COL32(255, 255, 255, 160),
                                   player.holding
                                       ? "LMB hold = CHARGE, release = THROW    RMB set down    "
                                         "F send SPARK to catch"
                                       : "WASD move  SHIFT sprint  SPACE jump  LMB grab  "
-                                        "Q park drone  F send drone  R respawn  ESC pause");
+                                        "Q park drone  F send drone  E use  R respawn  "
+                                        "ESC pause");
                     // Stat lines (script-owned: timer, data cores), top-left.
                     float statY = 12.0f;
                     for (const auto& [key, value] : stats) {
@@ -1600,10 +1784,10 @@ int main() {
                     if (gameState == GameState::Title) {
                         ImGui::TextUnformatted("VAULT");
                         ImGui::Separator();
-                        ImGui::TextWrapped("A physics puzzle in seventeen rooms. Carry crates, "
-                                           "charge the glove, ring the bells, ride the belts, "
-                                           "bend the light - and trust your drone to catch "
-                                           "what you throw.");
+                        ImGui::TextWrapped("A physics puzzle in seventeen rooms and the valley "
+                                           "above them. Carry crates, charge the glove, ring "
+                                           "the bells, ride the belts, bend the light - and "
+                                           "trust your drone to catch what you throw.");
                         ImGui::Spacing();
                         if (ImGui::Button("Play", {-1.0f, 0.0f})) {
                             startRun(false);
@@ -1653,6 +1837,21 @@ int main() {
                         if (changed) {
                             saveSettings(kSettingsPath, settings);
                         }
+                        if (!missionTitle.empty()) { // ADR-031: the tracked mission
+                            ImGui::Spacing();
+                            ImGui::TextDisabled("Mission");
+                            ImGui::Separator();
+                            ImGui::TextUnformatted(missionTitle.c_str());
+                            for (const std::string& line : missionLines) {
+                                const bool done = line.rfind("[x] ", 0) == 0;
+                                if (done) {
+                                    ImGui::TextColored({0.45f, 0.8f, 0.5f, 0.8f}, "%s",
+                                                       line.c_str());
+                                } else {
+                                    ImGui::TextUnformatted(line.c_str());
+                                }
+                            }
+                        }
                         if (!stats.empty()) {
                             ImGui::Spacing();
                             ImGui::TextDisabled("This run");
@@ -1664,9 +1863,10 @@ int main() {
                         ImGui::Spacing();
                         ImGui::TextDisabled("ESC resume");
                     } else { // Won
-                        ImGui::TextUnformatted("VAULT CLEARED");
+                        ImGui::TextUnformatted("SIGNAL SENT");
                         ImGui::Separator();
-                        ImGui::TextWrapped("Every room solved. Thanks for playing.");
+                        ImGui::TextWrapped("UNIT-7 climbed out of the vault and woke the "
+                                           "relay. Thanks for playing.");
                         ImGui::Spacing();
                         for (const auto& [key, value] : stats) {
                             ImGui::Text("%s  %s", key.c_str(), value.c_str());
@@ -1830,6 +2030,17 @@ int main() {
                         FORGE_INFO("script hot-reloaded: {}", path);
                     }
                 });
+                bool moduleChanged = false;
+                for (FileWatcher& w : includeWatches) {
+                    w.poll([&](const std::string& path) {
+                        FORGE_INFO("script module changed: {}", path);
+                        moduleChanged = true;
+                    });
+                }
+                if (moduleChanged && script.runFile(mainScript)) {
+                    FORGE_INFO("script hot-reloaded: {} (module change)", mainScript);
+                }
+                syncIncludeWatches();
             }
             // Dev console (FORGE_DEV): drop Lua into build/_cmd.lua and it runs
             // once — teleports, state dumps, scripted checks without a GUI.

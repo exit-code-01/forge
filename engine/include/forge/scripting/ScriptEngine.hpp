@@ -45,6 +45,13 @@ struct SpawnOptions {
     float friction = 0.5f;
     float density = 1000.0f;
     float restitution = 0.4f;
+    // collider = "mesh" (ADR-032): a STATIC triangle collider from the spawned
+    // model's own triangles (import correction + entity scale applied, so it
+    // matches what draws). halfExtents then only sizes the box fallback,
+    // used (with a warning) for dynamic/kinematic spawns or a model without
+    // CPU triangles.
+    bool meshCollider = false;
+    float yawDeg = 0.0f; // yaw = degrees about +Y at spawn: visual AND collider
 };
 
 // Optional table on forge.anim.play (ADR-030): {loop=, speed=, fade=,
@@ -131,6 +138,9 @@ public:
     // retires the fragile "overlap a box and hope it is unambiguous" lookup.
     std::function<std::string(uint32_t body)> onBodyName; // "" if unknown
     std::function<uint32_t(const std::string& name)> onBodyId; // 0 if none
+    // ADR-031: is this name in the model registry (dressing that degrades
+    // when an asset fails to import, instead of drawing the cube fallback)?
+    std::function<bool(const std::string& model)> onHasModel;
     // Player seams: conveyors push, hazards read velocity, SPARK needs to
     // know what the glove holds (and can make it let go).
     std::function<void(glm::vec3 velocity)> onPushPlayer;
@@ -197,6 +207,18 @@ public:
         onAnimPlay;
     std::function<std::vector<std::string>(const std::string& model)> onAnimClips;
     std::function<std::optional<std::pair<float, float>>(const std::string& entity)> onAnimTime;
+    // ---- Location/mission pass (ADR-031). The script owns the words and
+    // when they show; the host owns the pixels. "" (or an empty title)
+    // clears. set_mission lines starting "[x] " draw as done, "[ ] " open.
+    std::function<void(const std::string& text)> onSetPrompt; // "E  Talk"
+    std::function<void(const std::string& title, const std::vector<std::string>& lines)>
+        onSetMission;
+    std::function<void(const std::string& speaker, const std::string& text, float seconds)>
+        onSay;                                     // one subtitle line, bottom-centre
+    std::function<void(float alpha)> onSetFade;    // 0..1 black over the scene
+    std::function<bool()> onIsDev;                 // FORGE_DEV set (dev tools)
+    std::function<void(float meters)> onSetViewDistance; // camera far plane
+    std::function<void(float yawDeg, float pitchDeg)> onSetPlayerYaw; // 0 = facing -z
     // forge.scene.setPosition/getPosition(name), forge.player.position(),
     // forge.render.set_light(color, dir), forge.hud.set_hint(text).
     void bindScene();
@@ -205,6 +227,12 @@ public:
     // loaded functions remain live. Calls onStart() if the script defines it.
     bool runFile(const std::string& path);
     bool runString(const std::string& code); // headless smoke / console use
+
+    // Script modules (ADR-031): forge.include(path) runs another file into
+    // the SAME state, protected (an error logs and returns false; the
+    // including script carries on). Every path ever included is listed
+    // here (unique, first-include order) so the host can watch it.
+    [[nodiscard]] const std::vector<std::string>& includedFiles() const;
 
     // Calls the script's onUpdate(dt) if defined. Errors log ONCE per load
     // (not once per frame) and disable the hook until the next runFile.

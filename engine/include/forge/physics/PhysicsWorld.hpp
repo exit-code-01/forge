@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include <glm/gtc/quaternion.hpp>
 #include <glm/mat4x4.hpp>
 #include <glm/vec3.hpp>
 
@@ -43,6 +44,7 @@ struct BoxDesc {
     float friction = 0.5f;
     float density = 1000.0f; // kg/m^3, dynamic only
     bool lockRotation = false;
+    float yawDeg = 0.0f; // initial rotation about +Y (ADR-032 spawn opts.yaw)
 };
 
 // Opaque body handle (index + generation packed inside, so stale handles
@@ -65,6 +67,20 @@ public:
     BodyId addBox(const glm::vec3& halfExtents, const glm::vec3& position, BodyType type,
                   float restitution = 0.3f);
     BodyId addBox(const BoxDesc& desc);
+
+    // STATIC triangle-mesh collider (ADR-032): terrain, cliffs, ramps. CCW
+    // triangles (front = the side they face; simulation is one-sided, the
+    // character also blocks on back faces). `scale` is baked into the
+    // vertices (non-uniform is fine); the body sits at position/rotation.
+    // Coincident vertices are welded so internal edges between triangles
+    // (and between merged model parts) never catch a sliding character or
+    // crate. Removal is removeBody(); raycasts see it like any static body.
+    // nullopt (logged) when the mesh has no usable triangles.
+    [[nodiscard]] std::optional<BodyId>
+    createStaticMesh(const std::vector<glm::vec3>& vertices, const std::vector<uint32_t>& indices,
+                     const glm::vec3& position, const glm::quat& rotation,
+                     const glm::vec3& scale = glm::vec3(1.0f), float friction = 0.5f,
+                     float restitution = 0.3f);
 
     // Kinematic platforms (closes the ADR-020 gap): request a position; the
     // body SWEEPS there over the next simulated ticks with a real velocity,

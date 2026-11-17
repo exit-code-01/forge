@@ -780,3 +780,179 @@ resize, and the rooms 15-17 sequencer passes 48 of 48. NOT verified: STEP and
 CUBICSPLINE on a real file (the knight is LINEAR only; STEP is covered by the
 smoke), multiple skins in one file, Z-up or centimetre packs, and the sun disc
 in the default indoor view, where it sits behind the player's start.
+
+## ADR-031 — The Surface: a second location, missions, and the E verb
+
+On 2026-11-17 the owner lifted the master prompt's scope rules for this pass
+(rule 5's "no dialogue system ... no open areas, no extra zones", and "no
+quests"): the game should grow past puzzle rooms into locations, missions and
+a visible animated character. What was built is the smallest version of each:
+one new location, two missions, one character who says one line at a time. No
+dialogue trees, inventory, combat or level streaming. ENGINE_GAPS.md lists the
+seams (week 15) and the gaps found.
+SEAMS: `forge.include(path)` loads another file into the same Lua state,
+protected (an error logs and returns false; the includer carries on), with an
+include-cycle guard; `ScriptEngine::includedFiles()` lists every included
+path. The host watches each one and, when one changes, re-runs the MAIN
+script rather than the module, because modules append to the main script's
+tables and a lone re-run would append twice. scene.lua clears the module
+globals before including, and each module publishes its global on its last
+line, so a broken module is off, not half-stale. HUD: `set_prompt` (a key cap
+under the crosshair), `set_mission(title, lines)` (top-right; "[x] " lines dim
+green, "[ ] " open; repeated on the pause screen), `say(speaker, text,
+seconds)` (one subtitle line, replaced by the next) and `set_fade(alpha)`
+(black, under the HUD). Also `forge.game.dev()`,
+`forge.render.set_view_distance(m)` (the camera far plane: 100 m indoors,
+320 m outside), `forge.player.set_yaw(yaw[, pitch])` and
+`forge.scene.has_model(name)`. E is now the interact key; the debug crate
+rain fires only with FORGE_DEV and nothing in reach.
+KIT, NOT A SECOND ENGINE: scene.lua stays the facility. Before onStart it
+publishes VAULT, a kit of the shared tables (plates, bells, sockets, crates,
+doors, belts, checkpoints, drone, state) plus helpers (box, sendHome, setCp,
+addDoor, win). A module appends real entries, so the Surface's plates, bell,
+sockets, belt and cells run on the code that runs R1-R17. Generalisations
+that made that possible, each inert for the facility: sockets take an
+`accepts` predicate and `grabby` (ease any cell not in the glove: seats you
+fill by hand), belts take `y`/`pipY`/`hearX`/`humVol` and may stand still,
+SPARK's catcher zones take an x range, SPARK's cruise height is a hook
+(`ext.cruiseY`), and the z checkpoint ladder runs only at x < 200. The
+location is a position test (x > 200 is the Surface). The location owns the
+mood: sky, key light colour and direction, fog, exposure, bloom, view
+distance and the HVAC/music bed volumes (ducked outside, no new audio). It
+blends from the facility's current key over 1.5 s on arrival and snaps back
+on reset; while it owns the mood, scene.lua's room-light ease and hint ladder
+step aside.
+MISSIONS (missions.lua): a mission is data: objectives with a predicate or an
+explicit `Missions.complete`, ordered or not, optional or hidden, with
+callbacks. Objectives latch. State lives in a global (it survives hot reload)
+and is persisted on every change as mis_<id>_st / mis_<id>_obj in the
+forge.game number store. ASCEND is retro-fitted onto the facility without
+touching a puzzle: five ordered objectives read the existing checkpoint
+ladder (Storage done at checkpoint 6, the Reactor wing at 12, the Launch pass
+at 16, Assembly on boarding the lift, the last one on arrival), so it
+re-derives on any Continue. SIGNAL is the Surface's: three unordered cell
+objectives (predicate: that cell sits in a junction seat), a hidden
+"transmit" objective completed by E, and optional surface data cores (8 ->
+11 in all).
+SAVE: still one checkpoint number. Numbers past the facility's 18 are Surface
+respawn points (arrival, relay, ravine, ledge, belt), set by area tests; the
+latest is saved, not the furthest, because sub-areas are not a line. Only a
+Continue onto one of them loads the mission store; the Surface then re-pins
+seated cells, re-latches the ravine pad and re-rings the bell, and every
+other state follows from those.
+TRANSITION: behind Door 17 the end pad is now the floor of a 12 m shaft with
+a kinematic freight lift on it. Boarding with the door open shuts the door,
+the lift accelerates to 1.8 m/s past light strips for 8.5 m, the screen fades,
+and the player (offset on the lift kept, turned to face north) and SPARK
+teleport onto the Surface's lift, 3.3 m down a pit in the head-house; it rises
+while the fade and the mood blend come in. Both locations are one world,
+400 m apart; nothing streams.
+THE SURFACE (surface.lua): a 90 x 90 m valley at x 400, ringed by stepped box
+cliffs (8/14/21 m), with the head-house in the south and a relay tower (31 m,
+seen from everywhere) in a fenced yard at the centre. THE RAVINE (west, 12 m
+wide, full length): its bridge is a door entry that answers to a latched,
+SPARK-only pad on a 4.5 m mesa. The pad cannot be seen from the near ground,
+standing or jumping (the test raycasts it), only from a lookout climbed in 1 m
+ledges to 6 m, 6 m back from the edge. F-station SPARK on the pad. THE LEDGE
+(north-east, 4.5 m, 0.3 m stairs): a shed whose door answers to a bell on the
+north cliff, 15 m across a drop. Only a full charge (about 24 m/s) rings it;
+a tap falls short, a 9 m/s hit thunks, and the missed crate comes home. THE ORE
+BELT (east, a 2.5 m terrace): standing on the plate runs a belt 8.5 m up that
+drops its cell into an electrified yard. The yard zaps the cell home, and the
+player back to the respawn point. Stationed on the blue drop mark, SPARK
+catches the cell and sets it in a cradle on the terrace edge (the existing
+findDeposit). A cell set by the junction eases into a seat and locks: it is
+pinned, and the glove lets go of it. All three seats filled power the tower
+(light, emissive, sound, particles and SPARK's reunion orbit) and open the
+gate. E at the transmitter ends the run 2.2 s later through the old finish
+(best time, fanfare). R resets the current area's loose props, and every area
+has a respawn point. WREN is a salvager who keeps the relay to call her
+caravan: the KayKit knight (no manifest character qualified), with a box
+collider. She idles, turns to you within 8 m, plays Interact when spoken to and
+Cheer at the end. E starts or advances her lines: the offer (which starts
+SIGNAL), progress with a rotating tip for a missing cell, then a closing line.
+DRESSING (surface_dress.lua) is a placement list taken from
+docs/SURFACE_ASSETS.md: cliff faces, trees, rocks, props and ground cover,
+with box colliders only where the manifest suggests one and the spot is
+walkable. Each placement asks `has_model` first. When this was written, 37 of
+the 42 srf_ GLBs failed cgltf validation ("invalid glTF"). In each one, the mesh
+node is a child of both the source root and the inserted srf_root, because
+tools/srf_build.py re-parents the node without removing the old link. Only the five
+Survival-kit files load. So the dressing places 19 entities and logs the 159
+placements it skipped by model; the rest appear without a code change once
+the GLBs are rebuilt (about 330 Surface entities, under the 450 budget).
+VERIFICATION, stated plainly. build/_test_surface.lua plays the Surface by
+script and passes 122 of 122. It covers both passes, separated by
+resetGame(), and a Continue onto the Surface from a simulated fresh launch. It
+moves things by teleport and setPosition, and it stands in for two inputs: F
+(by setting SPARK's station) and the throw (by setting a velocity). Every
+plate, bell, socket, catch, deposit, door, the lift ride, the E path
+(`Interact.press`) and the win run for real. While it plays, the host's win
+screen is intercepted until the final step. build/_test_all.lua passes 51 of
+51. Two expectations changed: the cores check counts 11, and the closing "win
+fires" became three checks (the end pad boards the lift, the lift reaches the
+Surface, and arrival is not the win). Frame time in the debug build with validation on: 47.1 ms on
+average in the facility and 46.3 ms on the Surface, so no collapse. There
+were no script errors and no validation messages. NOT verified: hands-on feel
+of any of it (the lookout jumps, aiming F at the pad from 26 m, the charged
+throw at the bell, the belt timing), audio balance outdoors, the dressing with the real models, and a
+release-build frame time. A hot reload of an included module while on the
+Surface was checked (module tables were not duplicated, and the mood held).
+
+## ADR-032 — Static triangle-mesh colliders and spawn yaw
+
+The Surface reads as slabs because every collider was an axis-aligned box
+(ENGINE_GAPS, "Slopes, rotated colliders, terrain"). This adds the smallest
+thing that lets real terrain carry the player: a STATIC triangle-mesh body
+built from the triangles a model already draws.
+
+- `PhysicsWorld::createStaticMesh(vertices, indices, position, rotation, scale,
+  friction, restitution)` wraps Jolt `MeshShape`. Scale is baked into the
+  vertices (a mirroring scale re-winds the triangles). Coincident vertices are
+  welded on a 0.1 mm grid first: exporters duplicate a vertex per face, and
+  Jolt only finds inactive internal edges through shared indices, so an
+  unwelded mesh trips a sliding character on flat seams. Returns nullopt
+  (logged) for an empty or rejected mesh.
+- `forge::Model` keeps a CPU copy (`collisionVertices`/`collisionIndices`) of
+  every non-skinned part, import correction baked in: the collider is exactly
+  what draws. Cost: one position per vertex per loaded model, kept for all
+  models whether or not a collider is ever asked for.
+- Lua: `forge.scene.spawn(..., { collider = "mesh", yaw = degrees })`. `yaw`
+  turns the visual and the collider together (boxes too, via `BoxDesc::yawDeg`).
+  Dynamic or kinematic spawns, and models without CPU triangles (skinned
+  models, the built-in cube), fall back to the box from `halfExtents` with a
+  warning. Removal and raycasts work as for any static body.
+
+Why not a heightfield: the terrain pieces already exist as models (cliffs,
+slopes, steps), overhangs and vertical faces are needed, and one code path
+serves props and terrain. A heightfield stays open if a large rolling ground
+is ever wanted. Why static only: Jolt mesh shapes cannot be dynamic, and
+moving platforms are boxes today.
+
+Known limits: triangles are one-sided for dynamic bodies (wind CCW toward the
+walkable side); a thin shell can be tunnelled by a fast small body; no
+per-triangle material; pitch/roll at spawn is not exposed (yaw only).
+
+VERIFICATION, stated plainly. `tools/dev/test_mesh.lua` passes 16 of 16: a
+45 degree slope model spawned with a mesh collider is hit by 25 downward rays
+at heights that follow the triangles (1.00 to 5.00 m, not one box top); the
+same model at yaw 90 gives the rotated height field (error 0.000 m); the
+player capsule lands and rests on it; a dropped crate is deflected downhill;
+the model squashed to 30 % height (non-uniform scale) gives a 17 degree ramp
+the player is pushed 3 m up with a 0.93 m rise and no airborne frame; both box
+fallbacks warn and work; destroy removes the body. USE in the game: the
+seven ground rocks of the Surface dressing (72 to 172 triangles each) collide
+as their own triangles instead of 85 % bounds boxes, and the three generated
+terrain skins (cliffs 10,592 triangles, ravine 3,528, outcrops 1,470) are
+mesh colliders in front of the terrain boxes, which stay behind them as
+backing. `test_all` 51 of 51 and `test_surface` 126 of 126 (four new checks:
+a static wall between the eye and Wren hides the E prompt, and it returns
+when the wall goes), clean build, no validation messages, Surface frame
+43.8 ms average in the debug build with validation on (46.3 ms before,
+ADR-031). KEYBOARD, by a real W key through tools/dev/gui.py: the player
+stops at a rock head-on, slides round it when 0.8 m off centre, stops at the
+north and west cliff skins, and slides 11.7 m and 11.6 m along them at a
+steady distance with no snag. NOT verified: jumping onto the rocks or the
+skins' sloped parts by hand, a mirrored scale, thrown props against the
+skins beyond what the sequencer's bell and crate steps cover, and the ground
+itself: floors, stairs and ledges are still boxes.

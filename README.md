@@ -6,6 +6,10 @@ A from-scratch(ish) C++20 3D game engine, built solo and in public. Development
 is documented as a YouTube devlog — every phase ships something that compiles,
 runs, and is worth talking about on camera.
 
+**Contributing:** read [CLAUDE.md](CLAUDE.md) (binding rules for agents and humans) and
+[docs/COLLAB.md](docs/COLLAB.md) (lanes, setup on a fresh Windows machine, git workflow)
+before touching code. Coordination happens in [docs/COLLAB_LOG.md](docs/COLLAB_LOG.md).
+
 ## Build
 
 ```sh
@@ -73,6 +77,24 @@ every room is lit. Physics gains kinematic bodies, so the Carousel's lift
 carries the player. The build has been checked by scripted runs through the
 dev console and a clean boot; hands-on play of the new rooms has not happened
 yet.
+Week 15 (ADR-031) takes VAULT above ground. The run no longer ends behind
+Door 17: a freight lift carries UNIT-7 and SPARK up a shaft to **the Surface**,
+a daylit valley with a relay tower at its centre (own sky, sun, fog and mood,
+blended in on arrival). WREN, a salvager camped at the tower (an animated
+KayKit character), hands out the mission SIGNAL: three power cells, one per
+sub-area — across a ravine whose bridge only SPARK can trigger from a pad you
+must climb a lookout to see, in a shed opened by a cliff bell only a full
+charge rings, and at the end of an ore belt that drops its cell into an
+electrified yard unless SPARK is stationed to catch it. Seat the cells, power
+the tower, press E at the transmitter. A mission layer (missions.lua) runs a
+retro-fitted ASCEND mission through the facility's four zones and shows it
+on a HUD panel; E is the interact key; Continue works on the Surface.
+Engine seams: `forge.include` (script modules, hot-reloaded),
+`forge.hud.set_prompt/set_mission/say/set_fade`, `forge.game.dev`,
+`forge.render.set_view_distance`, `forge.player.set_yaw`,
+`forge.scene.has_model`. Verified by two scripted sequencers and screenshots;
+not yet played by hand. The Surface still wears mostly placeholder boxes:
+most of the new outdoor model pack does not import yet (ADR-031).
 
 ## Vulkan SDK
 

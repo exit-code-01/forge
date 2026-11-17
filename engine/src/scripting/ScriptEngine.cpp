@@ -11,6 +11,7 @@
 
 #include <glm/geometric.hpp>
 
+#include <algorithm>
 #include <cctype>
 #include <optional>
 #include <tuple>
@@ -52,6 +53,8 @@ struct ScriptEngine::Impl {
     sol::state lua;
     sol::protected_function onUpdate; // refreshed after every successful load
     bool updateBroken = false;        // latch: log a runtime error ONCE, not per frame
+    std::vector<std::string> includes;  // unique, in first-include order
+    std::vector<std::string> including; // the include stack (cycle guard)
 };
 
 ScriptEngine::ScriptEngine() : m_impl(std::make_unique<Impl>()) {
@@ -72,7 +75,38 @@ ScriptEngine::ScriptEngine() : m_impl(std::make_unique<Impl>()) {
 
     sol::table forge = lua.create_named_table("forge");
     forge.set_function("log", [](const std::string& message) { FORGE_INFO("[lua] {}", message); });
+
+    // forge.include(path) -> bool (ADR-031): a script module, loaded into
+    // this state like a second chunk of the caller. Protected: a broken
+    // module logs and returns false instead of aborting the includer. A
+    // file already on the include stack is refused (cycle).
+    Impl* impl = m_impl.get();
+    forge.set_function("include", [impl](const std::string& path) {
+        for (const std::string& open : impl->including) {
+            if (open == path) {
+                FORGE_ERROR("script include {}: include cycle, skipped", path);
+                return false;
+            }
+        }
+        if (std::find(impl->includes.begin(), impl->includes.end(), path) ==
+            impl->includes.end()) {
+            impl->includes.push_back(path); // watched even if this load fails
+        }
+        impl->including.push_back(path);
+        const sol::protected_function_result result =
+            impl->lua.safe_script_file(path, sol::script_pass_on_error);
+        impl->including.pop_back();
+        if (!result.valid()) {
+            const sol::error err = result.get<sol::error>();
+            FORGE_ERROR("script include {}: {}", path, err.what());
+            return false;
+        }
+        FORGE_INFO("script include: {}", path);
+        return true;
+    });
 }
+
+const std::vector<std::string>& ScriptEngine::includedFiles() const { return m_impl->includes; }
 
 ScriptEngine::~ScriptEngine() = default;
 
@@ -219,6 +253,12 @@ void ScriptEngine::bindScene() {
             options.friction = opts->get_or("friction", options.friction);
             options.density = opts->get_or("density", options.density);
             options.restitution = opts->get_or("restitution", options.restitution);
+            options.yawDeg = opts->get_or("yaw", options.yawDeg);
+            const std::string collider = opts->get_or("collider", std::string("box"));
+            options.meshCollider = collider == "mesh";
+            if (collider != "box" && collider != "mesh") {
+                FORGE_WARN("spawn '{}': unknown collider '{}', using box", name, collider);
+            }
         }
         onSpawnEntity(name, position, scale, halfExtents, texture, dynamic, mesh.value_or(""),
                       options);
@@ -242,6 +282,9 @@ void ScriptEngine::bindScene() {
     });
     sceneTable.set_function("bodyId", [this](const std::string& name) {
         return onBodyId ? onBodyId(name) : 0U;
+    });
+    sceneTable.set_function("has_model", [this](const std::string& model) {
+        return onHasModel ? onHasModel(model) : false;
     });
     sol::table playerTable = forge.create_named("player");
     playerTable.set_function(
@@ -297,6 +340,13 @@ void ScriptEngine::bindScene() {
             onPlayerDrop();
         }
     });
+    // set_yaw(deg[, pitchDeg]): face a direction after a location change
+    // (yaw 0 = -z; pitch defaults to level).
+    playerTable.set_function("set_yaw", [this](float yawDeg, sol::optional<float> pitchDeg) {
+        if (onSetPlayerYaw) {
+            onSetPlayerYaw(yawDeg, pitchDeg.value_or(0.0f));
+        }
+    });
 
     // forge.game.win(): the script signals the run is complete; the host
     // raises the win screen (week 6). Game/menu state is the HOST's business.
@@ -324,6 +374,8 @@ void ScriptEngine::bindScene() {
     gameTable.set_function("load", [this](const std::string& key) {
         return onLoadValue ? onLoadValue(key) : 0.0;
     });
+    // forge.game.dev() -> bool: FORGE_DEV is set (dev-only verbs, ADR-031).
+    gameTable.set_function("dev", [this]() { return onIsDev ? onIsDev() : false; });
 
     // forge.render.set_light(color[, dir]): per-room mood. dir defaults to the
     // zero vector -> host keeps its current key-light direction.
@@ -360,6 +412,12 @@ void ScriptEngine::bindScene() {
     renderTable.set_function("set_bloom", [this](float intensity) {
         if (onSetBloom) {
             onSetBloom(intensity);
+        }
+    });
+    // set_view_distance(m): the camera far plane (outdoor locations, ADR-031).
+    renderTable.set_function("set_view_distance", [this](float meters) {
+        if (onSetViewDistance) {
+            onSetViewDistance(meters);
         }
     });
     // set_sky([{zenith=, horizon=, ground=, sun_size=, sun_intensity=,
@@ -424,6 +482,39 @@ void ScriptEngine::bindScene() {
     hudTable.set_function("set_reticle", [this](const std::string& mode, float value) {
         if (onSetReticle) {
             onSetReticle(mode, value);
+        }
+    });
+    // ---- Location/mission pass (ADR-031): interact prompt, mission panel,
+    // one subtitle line, a scene fade. Words are the script's; pixels ours.
+    hudTable.set_function("set_prompt", [this](const std::string& text) {
+        if (onSetPrompt) {
+            onSetPrompt(text);
+        }
+    });
+    hudTable.set_function("set_mission",
+                          [this](const std::string& title, sol::optional<sol::table> lines) {
+                              std::vector<std::string> out;
+                              if (lines) {
+                                  for (std::size_t i = 1; i <= lines->size(); ++i) {
+                                      const sol::optional<std::string> line = (*lines)[i];
+                                      if (line) {
+                                          out.push_back(*line);
+                                      }
+                                  }
+                              }
+                              if (onSetMission) {
+                                  onSetMission(title, out);
+                              }
+                          });
+    hudTable.set_function("say", [this](const std::string& speaker, const std::string& text,
+                                        sol::optional<float> seconds) {
+        if (onSay) {
+            onSay(speaker, text, seconds.value_or(3.5f));
+        }
+    });
+    hudTable.set_function("set_fade", [this](float alpha) {
+        if (onSetFade) {
+            onSetFade(alpha);
         }
     });
 
