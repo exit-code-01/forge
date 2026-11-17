@@ -50,3 +50,8 @@ Machine or permission blockers go here (rule 10 in CLAUDE.md).
 - Shadowed outdoor faces were near-black: renderer ambient is fixed at about 1/28 of the sun. Worked round in Lua with a small emissive "shade fill" on tinted terrain and the skins (`SHADE_FILL`, surface.lua). REQUEST to C1 (renderer lane), not urgent: an optional `forge.render.set_ambient(sky, ground)`; details in ENGINE_GAPS.md. No renderer file was touched by the owner side for this.
 - Surface 126/126 and mesh 16/16 as run on this state, no validation messages, Surface frame 43.8 ms avg. test_all on this state: 51/51, no validation messages.
 - Still open on O2: the quest-giver is still the knight model (no robot asset on disk); floors, stairs and ledges are still boxes. Nothing committed.
+
+### 13:55 owner/O2 — STATUS
+- Quest-giver model: `assets/models/wren_bot.glb`, an original robot built and animated by `tools/gen_wren.py` (headless Blender 5.3; 2,040 triangles, 15 joints, clips Idle / Interact / Cheer). surface.lua spawns it when present, the knight otherwise. Ledger row added.
+- Seen in the engine: imports (15 joints, 3 clips), faces the player, all three clips play, E Talk prompt shows. test_surface 126/126 with it, no validation messages. test_all and test_mesh not re-run for this change (Lua + one asset).
+- Not committed yet.

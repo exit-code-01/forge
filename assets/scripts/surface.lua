@@ -366,8 +366,10 @@ local function spawnMovables()
         count = count + 1
     end
     K.box(CRATE_S2.name, CRATE_S2.pos, vec3(0.5, 0.5, 0.5), "crate", true, true, "crate")
-    -- Wren: the quest-giver (KayKit knight), with a box collider of her own
-    forge.scene.spawn("Wren", vec3(394.5, 0.0, 13.0), vec3(1, 1, 1), vec3(0, 0, 0), "", false, "knight")
+    -- Wren: the quest-giver (a relay-keeper robot), with a box collider of her own
+    -- wren_bot: an original robot (tools/gen_wren.py); the knight is the fallback
+    local wrenModel = forge.scene.has_model("wren_bot") and "wren_bot" or "knight"
+    forge.scene.spawn("Wren", vec3(394.5, 0.0, 13.0), vec3(1, 1, 1), vec3(0, 0, 0), "", false, wrenModel)
     forge.scene.spawn("Wren Body", vec3(394.5, 0.9, 13.0), vec3(0.001, 0.001, 0.001),
                       vec3(0.35, 0.9, 0.35), "metal", false)
     forge.anim.play("Wren", "Idle", { fade = 0 })
