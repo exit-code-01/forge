@@ -25,6 +25,20 @@ themselves are fetched by CMake, and macOS/Windows need nothing extra):
 sudo apt install xorg-dev libwayland-dev libxkbcommon-dev wayland-protocols
 ```
 
+## Packaging
+
+Build the optimised tree, then zip it (Windows):
+
+```sh
+cmake --preset release
+cmake --build --preset release
+python tools/package.py          # -> dist/forge-vault-<sha>-win64.zip
+```
+
+The zip holds the exe, `assets/`, `LICENSES/` (third-party notices plus
+`docs/ASSET_SOURCES.md`) and `README-PLAY.txt`. Unzip and run
+`forge_sandbox.exe` from inside the unzipped folder. `dist/` is git-ignored.
+
 ## Layout
 
 - `engine/` — the engine itself: a static library. Public API lives under

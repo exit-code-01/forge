@@ -1,24 +1,15 @@
-# CI smoke test (Windows). Mirror of run_sandbox.sh:
-#   exit 0                        -> a display was present, ran and shut down
-#   exit 1 with "glfwInit failed" -> headless runner, graceful failure path
-# Anything else is a real failure.
-$ErrorActionPreference = "Continue"
-
-$bin = "build\bin\forge_sandbox.exe"
-
-$out = & $bin 2>&1 | Out-String
-$code = $LASTEXITCODE
-Write-Host $out
-
-if ($code -eq 0) {
-    Write-Host "PASS: sandbox ran and exited cleanly (display present)."
-    exit 0
+# Smoke test (Windows), for LOCAL use on a machine with a GPU. CI does not run
+# this (hosted runners have no GPU). Starts the exe, lets it run for $Seconds,
+# kills that PID only, and fails if it exited early with a non-zero code.
+#   $env:BIN overrides the binary (default: release preset).
+param([int]$Seconds = 15)
+$bin = if ($env:BIN) { $env:BIN } else { "build\release\bin\forge_sandbox.exe" }
+$p = Start-Process -FilePath $bin -PassThru
+Start-Sleep -Seconds $Seconds
+if ($p.HasExited) {
+    if ($p.ExitCode -eq 0) { Write-Host "PASS: exited cleanly."; exit 0 }
+    Write-Host "FAIL: exited early with code $($p.ExitCode)."; exit 1
 }
-
-if ($code -eq 1 -and $out -match "glfwInit failed") {
-    Write-Host "PASS: headless runner, sandbox failed gracefully as designed."
-    exit 0
-}
-
-Write-Host "FAIL: unexpected exit ($code) without the expected graceful GLFW error."
-exit 1
+Stop-Process -Id $p.Id -Force
+Write-Host "PASS: still running after $Seconds s."
+exit 0

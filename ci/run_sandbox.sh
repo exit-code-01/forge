@@ -1,20 +1,18 @@
 #!/usr/bin/env bash
-# CI smoke test (POSIX). The sandbox opens a window and loops until closed,
-# so on a headless runner it can't reach a clean exit 0 — GLFW fails to init
-# instead. Both outcomes are correct:
-#   exit 0                          -> a display was present, ran and shut down
-#   exit 1 with "glfwInit failed"   -> headless runner, graceful failure path
-# Anything else (crash, wrong error) is a real failure.
+# Smoke test (POSIX), local or CI. Only for machines WITHOUT a GPU/display:
+# the sandbox either fails gracefully in glfwInit (exit 1) or, with a display,
+# never exits on its own, so it is bounded by `timeout` (124 = still running).
+#   BIN=path/to/forge_sandbox overrides the binary (default: release preset).
 set -u
 
-BIN="build/bin/forge_sandbox"
+BIN="${BIN:-build/release/bin/forge_sandbox}"
 
-out=$("$BIN" 2>&1)
+out=$(timeout 60 "$BIN" 2>&1)
 code=$?
-echo "$out"
+echo "$out" | tail -40
 
-if [ "$code" -eq 0 ]; then
-    echo "PASS: sandbox ran and exited cleanly (display present)."
+if [ "$code" -eq 0 ] || [ "$code" -eq 124 ]; then
+    echo "PASS: sandbox started ($code; 124 = ran until the timeout)."
     exit 0
 fi
 
