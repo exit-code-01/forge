@@ -38,7 +38,8 @@ The README says `build/bin`; the presets actually output to `build\debug\bin`.
 - Run the sequencers (`build/` must exist; it is gitignored):
   ```
   cp tools/dev/test_all.lua build/_start.lua     && bash tools/dev/rundev.sh 200   # expect 51 PASS
-  cp tools/dev/test_surface.lua build/_start.lua && bash tools/dev/rundev.sh 200   # expect 126 PASS
+  cp tools/dev/test_surface.lua build/_start.lua && bash tools/dev/rundev.sh 400   # expect 126 PASS (slow machine: 400 s)
+  cp tools/dev/test_spillway.lua build/_start.lua && bash tools/dev/rundev.sh 420   # expect 111 PASS (ADR-034)
   cp tools/dev/test_mesh.lua build/_start.lua    && bash tools/dev/rundev.sh 30    # expect 16 PASS (ADR-032)
   grep -c "T> PASS" build/_dev.log ; grep "T> FAIL" build/_dev.log
   ```

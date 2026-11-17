@@ -129,3 +129,38 @@ filled from the ADR log so the ledger is complete.
 - **Interact occlusion** (week 15) — the E prompt uses distance + facing, not
   line of sight; fine for an NPC and a console in the open, wrong through
   walls. A raycast in `Interact.update` (Lua) closes it if a case appears.
+
+## Faked by the Spillway (Location 3, ADR-034) - what a real feature would replace
+
+- **Water is a flat opaque slab plus a Lua rule.** There is no water volume,
+  no transparency, no refraction, no buoyancy, no swimming: the slab is a
+  non-solid entity (dark teal, slightly emissive, roughness 0.06) moved with
+  `setPosition`; "in the water" is `feet below the surface inside a
+  rectangle`, answered with `forge.player.teleport` to the checkpoint. Wants:
+  alpha blending (see Alpha modes), a trigger volume, and a physics buoyancy
+  query. The spec asked for a kinematic slab for the sluice; a kinematic body
+  would be walkable, so the slab has no collider at all.
+- **Currents are script, per frame.** `forge.player.push` while the player is
+  over a lane, `forge.physics.set_velocity` on crates (a half-submerged hover
+  at y = 0 and a push toward +z). Lodged "stepping stone" crates are dynamic
+  bodies teleported back to their slot every frame (velocity zeroed) - they
+  are not welded to anything. Needs a fixed/weld constraint or a "frozen
+  dynamic" body state; whether the character controller treats a body that is
+  re-teleported every frame as steady ground is only verified by the
+  sequencer standing on them (test_spillway e4).
+- **The R17 beam is copied, not reused.** The emitter -> prism -> receiver
+  scheme (two raycasts, forgiveness easing onto a marker) lives in local
+  functions of scene.lua (`updateReactor`), so the Spillway re-implements it
+  in spillway.lua with the same models and rules. Wants the beam rig lifted
+  into the VAULT kit (`K.beamRig{...}`).
+- **SPARK's light is a per-frame `forge.render.light` at the drone's
+  position** while the drone is inside the hall's box (cleared outside). No
+  light attachment API (see Attachments), no light radius falloff control.
+- **Triggers are position math again** (areas, the plate, the lane, the hall's
+  mood blend, drowning). Same ask as "Trigger volumes".
+- **Entity count and lights.** The Spillway adds about 250 entities and 16 more
+  stairs/steps as boxes (no culling, see Level streaming). Lights: only the
+  nearest 16 reach the renderer, so the hall's three lamps, SPARK's lamp and
+  the plaza lamps share that budget with 14 data-core lights.
+- **One-way ride.** The rail cart goes Surface -> Spillway only; the Surface
+  is not reachable again (nothing there is needed after SIGNAL).

@@ -81,3 +81,10 @@ Machine or permission blockers go here (rule 10 in CLAUDE.md).
 - Gate on the owner machine: 51/51, 126/126, 16/16, no validation messages. Surface frame 43.3 ms vs 42.6 ms before (debug + validation, ±2 ms noise).
 - C2 done: CI is green on GitHub for the first time since July (run 44054899153: Windows, Linux, macOS builds + script lint; clang-format advisory, the tree is not yet formatted). `tools/package.py` builds a playable zip into dist/.
 - Open: reformat the tree with clang-format (then make the format job blocking); thin-cable shadow dashing at ~40 m (ENGINE_GAPS).
+
+### 14:20 owner/C3 - STATUS
+- Location 3, THE SPILLWAY (ADR-034): spillway.lua + spillway_dress.lua, 3 generated models (tools/gen_spillway.py), 3 generated sounds, mission CROSSING, 3 more data cores (14). SIGNAL now starts CROSSING instead of winning; the win is at the caravan.
+- Gate as run: test_spillway 111/111, test_all 51/51, test_surface 126/126 (only its two win checks changed: now "CROSSING starts, no win"), test_mesh 16/16, zero FAIL, zero vuid. No C++ changed. Spillway frame 55 ms avg (debug + validation).
+- Also: kit "socket magnet" in scene.lua updateSockets (`magnet` on a socket, 1.2 m for junction and winch). Screenshots build/_shots/spl_*.png looked at.
+- Not verified: real-keyboard play of the Spillway (test teleports and sets positions; glove, F and jumps between crates are not exercised by real input); lodged crates as steady ground was only checked by the sequencer standing on them. See ENGINE_GAPS.
+- Not committed.

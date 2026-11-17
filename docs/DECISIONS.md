@@ -1066,3 +1066,67 @@ render; no acne or peter-panning seen on the terrain; the R5 room differs
 from before by 1.6/255 mean. NOT verified: shimmer while moving (stills
 only; snapping is by construction), the sprint FOV re-grid, a sun near
 vertical, keyboard play on the Surface.
+
+## ADR-034 — The Spillway: a third location, water as a Lua rule, and the crossing
+
+The run now ends on a third location. After the Surface transmitter, Wren's
+caravan answers: it is stranded on the far side of an old hydro dam whose gates
+jammed. SIGNAL no longer wins; its completion starts the mission CROSSING and
+lights a rail cart in the relay yard. Winning the Spillway calls `VAULT.win`
+(best time and fanfare unchanged). No C++ changed.
+
+- **Module, not engine.** `assets/scripts/spillway.lua` (+ `spillway_dress.lua`)
+  is a location module on the VAULT kit exactly like surface.lua: its
+  checkpoints (6, after the Surface's five), key sockets, crates, doors
+  (`Spl Crown`, `Spl Cage Door`), the mission and the three data cores (11 ->
+  14) are real entries in the shared tables. It is published as `SPILLWAY`
+  at the END of its file. Hooks: scene.lua includes it and forwards
+  onStart/update/reset; surface.lua's SIGNAL `onComplete` calls
+  `SPILLWAY.onSignal`, its resume/resetArea delegate for Spillway
+  checkpoints, and its update stops at x > 600.
+- **Placed far away.** Centred on world x = 800, z = 0: 80 x 70 m, plaza top
+  y = 1.0, water at rest y = 0, the dam on the north edge (crest y = 9). The
+  Surface's `locAt` (x > 200) still answers "surface"; the Spillway applies its
+  own dusk mood (sky, fog, key light, ambient, HUM ducking) on top, re-applying
+  while the Surface's own blend runs, and eases a dark hall mood in and out
+  by the player's position.
+- **Water is a slab and a rule (no engine change).** A flat, opaque, slightly
+  emissive non-solid slab per body, moved with `setPosition`. The player is
+  "in the water" when feet are 0.35 m under the surface inside the body's
+  rectangle: splash, shake, `K.respawn()` to the last checkpoint. Props that
+  stay under 0.6 s go home. Currents: `forge.player.push` over a lane (hard
+  in the air, a nudge on a stone), `forge.physics.set_velocity` on crates
+  (hover at the surface, +z), animated foam strips and rate-limited
+  `forge.fx.burst`s. `forge.player.push` and `set_velocity` are the only
+  engine seams used.
+- **Three sub-challenges, three verb mixes.**
+  - THE SLUICE (west): a counterweight plate weighs the player and crates
+    (3 crates, or the player + 2); the water falls in notches (0 / -0.7 /
+    -1.4 / -2.8) revealing stones (tops 0.3 / -0.5 / -1.3 / -2.2) and a stair.
+    At 3 the sluice latches for 35 s (beeps for the last 10); water returning
+    over a stone drowns whoever is on it.
+  - THE CURRENT (centre): the gorge runs toward a drop. Crates float and lodge
+    at a grate in three slots in a row upstream; the key is on the platform
+    behind them, against the current. A crate with no slot goes round the row,
+    over the drop and home.
+  - THE TURBINE HALL (east): dark. SPARK's lamp is a `forge.render.light`
+    that follows the drone only inside the hall, so SPARK must be sent ahead
+    (F). A beam, a prism and a receiver (R17's raycast scheme, re-implemented
+    - the original is local to scene.lua) restart the runner; the cage lifts.
+- **Finish.** Three keys (the battery model, tinted per sub-area) seat in the
+  crown winch (three kit sockets, any key any seat, pinned once seated); the
+  crown gate (kinematic door) lifts; stairs and an 80 m crest lead to the
+  caravan terrace; E at Wren (a second `wren_bot`, Cheer clip) completes
+  CROSSING and, 4.5 s later, calls `VAULT.win`.
+- **Hints.** Each sub-area has a label line, then one vague hint after ~40 s
+  without progress and a plainer one 60 s later; none before the clock.
+- **Assets.** Three procedural models (`tools/gen_spillway.py`: spl_turbine,
+  spl_pier, spl_dam_face) and three procedural sounds
+  (`tools/gen_spillway_sounds.py`: water_loop, splash, turbine_start); the
+  rest reuses the Surface's CC0 srf_* props. Ledger rows added.
+- **Verification.** `tools/dev/test_spillway.lua` (sequencer, see its header
+  for what is real and what is teleported) and `tools/dev/shot_spillway.lua`
+  (screenshots). Run: test_spillway 111/111; frame time on the plaza 55 ms avg (debug + validation; the Surface is ~43 ms). Also in this ADR: a kit "socket magnet" (`magnet` on a grabby socket: a released prop within that reach of a FREE seat is drawn in; set to 1.2 m for the Surface junction and the crown winch).
+- **Faked / open** (docs/ENGINE_GAPS.md): water (no volume, transparency or
+  buoyancy), lodged crates (teleported bodies), the beam rig (copied), light
+  attachment, trigger volumes, culling.

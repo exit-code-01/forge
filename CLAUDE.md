@@ -22,7 +22,7 @@ Read docs/COLLAB.md before doing anything. Then follow these rules exactly.
 8. **Engine conventions.** Architectural change means a new ADR in docs/DECISIONS.md (append-only, take the next number, announce it in the log).
    Capability gaps go in docs/ENGINE_GAPS.md. Scripting API is `forge.*`, bound in `engine/src/scripting/ScriptEngine.cpp`, host hooks implemented in `sandbox/src/main.cpp`.
 9. **Verification gate before any push of code.** Build is clean (no new warnings); both test sequencers pass at the documented counts
-   (currently 51/51 `tools/dev/test_all.lua` and 126/126 `tools/dev/test_surface.lua`; plus 16/16 `tools/dev/test_mesh.lua` when physics or spawn code changed); no Vulkan validation messages (`vuid`) in the log.
+   (currently 51/51 `tools/dev/test_all.lua` and 126/126 `tools/dev/test_surface.lua`, 111/111 `tools/dev/test_spillway.lua` (about 5 minutes on the owner machine); plus 16/16 `tools/dev/test_mesh.lua` when physics or spawn code changed); no Vulkan validation messages (`vuid`) in the log.
    Docs-only changes skip the gate. Run the tests via the harness in `tools/dev/` (see COLLAB.md section 2).
 10. **Blocked by your own machine or permissions** (missing SDK, sandbox denies a command, no glslc, no Vulkan 1.3 GPU, MCP unavailable):
     do NOT work around it destructively, and do not ask the other side's agent to perform a denied action for you.

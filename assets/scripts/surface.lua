@@ -149,7 +149,7 @@ K.bells[#K.bells + 1] = { id = "bS", name = "Srf Bell", center = vec3(431.0, 5.9
 local SEATS = {}
 for i, x in ipairs({ 404.2, 406.0, 407.8 }) do
     local s = { id = "s_j" .. i, name = "Srf Socket " .. i, seat = vec3(x, 1.15, 11.2),
-                accepts = isCell, grabby = true, offTex = "metal_yellow",
+                accepts = isCell, grabby = true, magnet = 1.2, offTex = "metal_yellow",
                 sfxOn = "assets/sounds/power_up.wav", sfxOff = "assets/sounds/power_down.wav" }
     K.sockets[#K.sockets + 1] = s
     SEATS[i] = s
@@ -558,7 +558,8 @@ Missions.define({
     onComplete = function(quiet)
         local m = M()
         m.transmitted = true
-        if not quiet then m.winT = 2.2 end -- beacon flash, Wren cheers, then the win screen
+        -- ADR-034: the caravan answers; the run ends on the Spillway now
+        if SPILLWAY then SPILLWAY.onSignal(quiet) elseif not quiet then m.winT = 2.2 end
     end,
 })
 
@@ -631,7 +632,7 @@ function S.talkToWren()
             startTalk({ first, TIPS[missing[m.tipIdx]] })
         end
     else
-        startTalk({ "They heard us. Thank you, UNIT-7." })
+        startTalk({ SPILLWAY and SPILLWAY.wrenLine() or "They heard us. Thank you, UNIT-7." })
     end
     talkNext()
 end
@@ -869,6 +870,7 @@ function S.update(dt, pp)
         applyMood(m.blendT / 1.5, m.keyFrom)
     end
     updateRide(dt, pp)
+    if pp.x > 600 then return end -- the Spillway (spillway.lua) owns its own areas and hints
     if m.loc ~= "surface" then return end
     updatePins(dt)
     updateWren(dt, pp)
@@ -915,7 +917,7 @@ function S.onStart()
             forge.fx.burst(vec3(400, 31, -3), 40, vec3(0.4, 2.4, 0.8))
             forge.scene.setTexture("Srf Transmitter", "metal_green")
             wrenPlay("Cheer", false)
-            forge.hud.say("WREN", "They heard us. Thank you, UNIT-7.", 4.0)
+            if not SPILLWAY then forge.hud.say("WREN", "They heard us. Thank you, UNIT-7.", 4.0) end
             Missions.complete("signal", "transmit")
         end })
 end
@@ -942,10 +944,12 @@ function S.resume(cp)
     end
     if Missions.status("signal") == 2 then m.transmitted = true end
     forge.log("surface: resumed at checkpoint " .. cp .. " (" .. seatedCount() .. " cells seated)")
+    if SPILLWAY and SPILLWAY.ownsCp(cp) then SPILLWAY.resume(cp) end
 end
 
 -- R on the Surface: this area's loose props go home.
 function S.resetArea(cp)
+    if SPILLWAY and SPILLWAY.ownsCp(cp) then return SPILLWAY.resetArea(cp) end
     local area = K.checkpoints[cp] and K.checkpoints[cp].area
     local n = 0
     for _, c in ipairs(CELLS) do

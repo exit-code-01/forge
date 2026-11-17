@@ -219,7 +219,7 @@ seat("p1 ", "Cell C", 3, "belt")
 finale("p1 ")
 act(function() Interact.press() end)
 untilC("p1 transmitter completes SIGNAL", function() return Missions.status("signal") == 2 end, 2)
-untilC("p1 the run ends (win)", function() return DBG.isWon() == true and winCalls == 1 end, 4)
+untilC("p1 the transmit starts CROSSING and does not end the run (ADR-034)", function() return Missions.status("crossing") == 1 and winCalls == 0 and not DBG.isWon() end, 4)
 act(function() log("run time " .. string.format("%.1f", DBG.run.t) .. " best=" .. forge.game.load("best_time")) end)
 
 -- ======================= RESET =======================
@@ -278,7 +278,7 @@ seat("p2 ", "Cell C", 3, "belt")
 finale("p2 ")
 act(function() log("PASS-COUNT-MARK") end)
 act(function() forge.game.win = realWin; Interact.press() end)
-untilC("p2 the run ends (win screen)", function() return DBG.isWon() == true end, 4)
+untilC("p2 the transmit starts CROSSING (the run ends on the Spillway now)", function() return Missions.status("crossing") == 1 and not DBG.isWon() end, 4)
 act(function() log("DONE") end)
 
 -- ---- scheduler

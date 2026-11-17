@@ -1117,7 +1117,13 @@ local function updateSockets(dt, pp)
                         nearPlayer = forge.player.holding() == c.name
                     end
                     local tr = crateTrack[c.name]
-                    if d2 < 0.64 and math.abs(dy) < 0.9 and (tr and tr.speed or 0) < 3.5
+                    -- socket magnet: a module seat may set `magnet` (m): a released or
+                    -- resting prop within that reach of a FREE seat is drawn in
+                    local reach, reachY = 0.64, 0.9
+                    if s.magnet and state.sockets[s.id] ~= true then
+                        reach, reachY = s.magnet * s.magnet, s.magnet + 0.3
+                    end
+                    if d2 < reach and math.abs(dy) < reachY and (tr and tr.speed or 0) < 3.5
                        and not nearPlayer then
                         forge.scene.setPosition(c.name, moveTowards(at, s.seat, 3.0 * dt))
                         for _, body in ipairs(forge.physics.overlap(at, vec3(0.3, 0.3, 0.3))) do
@@ -1940,9 +1946,10 @@ VAULT = {
         doors2[name] = d
     end,
 }
-Missions, Interact, SURFACE = nil, nil, nil -- a failed module stays OFF (no stale mix)
+Missions, Interact, SURFACE, SPILLWAY = nil, nil, nil, nil -- a failed module stays OFF (no stale mix)
 forge.include("assets/scripts/missions.lua")
 forge.include("assets/scripts/surface.lua")
+forge.include("assets/scripts/spillway.lua")
 
 function onStart()
     forge.log("scene.lua loaded (" .. _VERSION .. ") - seventeen rooms")
@@ -1983,6 +1990,7 @@ function onStart()
     refreshBest()
     if Missions then Missions.onStart() end -- ADR-031: mission layer
     if SURFACE then SURFACE.onStart() end   -- builds once; re-applies the location mood
+    if SPILLWAY then SPILLWAY.onStart() end -- ADR-034: the third location
     forge.log("Q: park/recall drone (rooms 5, 6, 8)  F: send drone where you aim (week 12)")
 end
 
@@ -2133,6 +2141,7 @@ function resetGame()
     -- ADR-031: the location layer (lifts, Surface props, mood) and the
     -- mission layer reset with the run.
     if SURFACE then SURFACE.reset() end
+    if SPILLWAY then SPILLWAY.reset() end
     if Missions then Missions.reset() end
     forge.log("*** game reset ***")
 end
@@ -2332,6 +2341,7 @@ function onUpdate(dt)
     -- and the interact verb. The run's finish line (winRun) now lives on the
     -- Surface: the mission that ends the game calls it.
     if SURFACE then SURFACE.update(dt, pp) end
+    if SPILLWAY then SPILLWAY.update(dt, pp) end
     if Missions then Missions.update(dt) end
     local usedE = false
     if Interact then
