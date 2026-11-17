@@ -57,16 +57,26 @@ using DataPtr = std::unique_ptr<cgltf_data, DataDeleter>;
 
 const char* resultText(cgltf_result result) {
     switch (result) {
-    case cgltf_result_data_too_short: return "data too short";
-    case cgltf_result_unknown_format: return "unknown format";
-    case cgltf_result_invalid_json: return "invalid JSON";
-    case cgltf_result_invalid_gltf: return "invalid glTF";
-    case cgltf_result_invalid_options: return "invalid options";
-    case cgltf_result_file_not_found: return "file not found";
-    case cgltf_result_io_error: return "I/O error";
-    case cgltf_result_out_of_memory: return "out of memory";
-    case cgltf_result_legacy_gltf: return "glTF 1.0 is not supported";
-    default: return "error";
+    case cgltf_result_data_too_short:
+        return "data too short";
+    case cgltf_result_unknown_format:
+        return "unknown format";
+    case cgltf_result_invalid_json:
+        return "invalid JSON";
+    case cgltf_result_invalid_gltf:
+        return "invalid glTF";
+    case cgltf_result_invalid_options:
+        return "invalid options";
+    case cgltf_result_file_not_found:
+        return "file not found";
+    case cgltf_result_io_error:
+        return "I/O error";
+    case cgltf_result_out_of_memory:
+        return "out of memory";
+    case cgltf_result_legacy_gltf:
+        return "glTF 1.0 is not supported";
+    default:
+        return "error";
     }
 }
 
@@ -93,22 +103,21 @@ std::string nodeName(const cgltf_data& data, const cgltf_node& node) {
 class Importer {
 public:
     Importer(const std::string& path, const ImportOptions& options)
-        : m_path(path), m_options(options),
-          m_dir(std::filesystem::path(path).parent_path()) {}
+        : m_path(path), m_options(options), m_dir(std::filesystem::path(path).parent_path()) {}
 
     ModelData run() {
         cgltf_options options{};
         cgltf_data* raw = nullptr;
         cgltf_result result = cgltf_parse_file(&options, m_path.c_str(), &raw);
         if (result != cgltf_result_success) {
-            throw std::runtime_error("glTF import failed: " + m_path + " (" +
-                                     resultText(result) + ")");
+            throw std::runtime_error("glTF import failed: " + m_path + " (" + resultText(result) +
+                                     ")");
         }
         m_data.reset(raw);
         result = cgltf_load_buffers(&options, m_data.get(), m_path.c_str());
         if (result != cgltf_result_success) {
-            throw std::runtime_error("glTF buffers failed: " + m_path + " (" +
-                                     resultText(result) + ")");
+            throw std::runtime_error("glTF buffers failed: " + m_path + " (" + resultText(result) +
+                                     ")");
         }
         // Bounds-checks every accessor/view against its buffer: after this,
         // reads cannot run off the end of a malformed file.
@@ -147,8 +156,7 @@ private:
                 if (bytes == nullptr) {
                     throw std::runtime_error("image buffer view has no data");
                 }
-                m_out.images.push_back(
-                    loadImageFromMemory(bytes, image->buffer_view->size, label));
+                m_out.images.push_back(loadImageFromMemory(bytes, image->buffer_view->size, label));
                 m_out.imageSources.emplace_back();
             } else if (image->uri != nullptr && std::strncmp(image->uri, "data:", 5) == 0) {
                 const char* comma = std::strchr(image->uri, ',');
@@ -245,8 +253,7 @@ private:
             return false;
         }
         if (primitive.has_draco_mesh_compression != 0) {
-            FORGE_WARN("model {}: '{}' is Draco-compressed (unsupported), skipped", m_path,
-                       owner);
+            FORGE_WARN("model {}: '{}' is Draco-compressed (unsupported), skipped", m_path, owner);
             return false;
         }
         const cgltf_accessor* position = nullptr;
@@ -258,10 +265,17 @@ private:
                 continue;
             }
             switch (attribute.type) {
-            case cgltf_attribute_type_position: position = attribute.data; break;
-            case cgltf_attribute_type_normal: normal = attribute.data; break;
-            case cgltf_attribute_type_texcoord: uv = attribute.data; break;
-            default: break; // COLOR_0 is ignored (ADR-030); tangents arrive with normal maps
+            case cgltf_attribute_type_position:
+                position = attribute.data;
+                break;
+            case cgltf_attribute_type_normal:
+                normal = attribute.data;
+                break;
+            case cgltf_attribute_type_texcoord:
+                uv = attribute.data;
+                break;
+            default:
+                break; // COLOR_0 is ignored (ADR-030); tangents arrive with normal maps
             }
         }
         if (position == nullptr || position->count == 0) {
@@ -292,8 +306,7 @@ private:
             for (size_t i = 0; i < out.indices.size(); ++i) {
                 const size_t index = cgltf_accessor_read_index(primitive.indices, i);
                 if (index >= count) {
-                    FORGE_WARN("model {}: '{}' has an out-of-range index, skipped", m_path,
-                               owner);
+                    FORGE_WARN("model {}: '{}' has an out-of-range index, skipped", m_path, owner);
                     return false;
                 }
                 out.indices[i] = static_cast<uint32_t>(index);
@@ -321,9 +334,8 @@ private:
             s.x = -s.x;
         }
         const glm::vec3 safe = glm::max(glm::abs(s), glm::vec3(1e-8f)) * glm::sign(s);
-        r = glm::normalize(glm::quat_cast(glm::mat3(glm::vec3(m[0]) / safe.x,
-                                                    glm::vec3(m[1]) / safe.y,
-                                                    glm::vec3(m[2]) / safe.z)));
+        r = glm::normalize(glm::quat_cast(glm::mat3(
+            glm::vec3(m[0]) / safe.x, glm::vec3(m[1]) / safe.y, glm::vec3(m[2]) / safe.z)));
     }
 
     // Every node of the file (all roots, depth-first, parents first) — not
@@ -382,9 +394,8 @@ private:
             }
             for (cgltf_size j = 0; j < skin.joints_count; ++j) {
                 m_skeleton->jointNodes.push_back(m_nodeIndex.at(skin.joints[j]));
-                m_skeleton->inverseBind.push_back(ibm.size() >= (j + 1) * 16
-                                                      ? glm::make_mat4(&ibm[j * 16])
-                                                      : glm::mat4(1.0f));
+                m_skeleton->inverseBind.push_back(
+                    ibm.size() >= (j + 1) * 16 ? glm::make_mat4(&ibm[j * 16]) : glm::mat4(1.0f));
             }
         }
     }
@@ -433,9 +444,8 @@ private:
                     weights = attribute.data;
                 }
             }
-            const bool skinned = node.skin != nullptr && joints != nullptr &&
-                                 weights != nullptr && joints->count == count &&
-                                 weights->count == count;
+            const bool skinned = node.skin != nullptr && joints != nullptr && weights != nullptr &&
+                                 joints->count == count && weights->count == count;
             if (skinned) {
                 const cgltf_skin& skin = *node.skin;
                 const uint32_t base = m_skinBase[static_cast<size_t>(&skin - m_data->skins)];
@@ -556,7 +566,8 @@ private:
                         clip.duration = std::max(clip.duration, out.scale.times.back());
                     }
                     break;
-                default: break;
+                default:
+                    break;
                 }
                 if (!ok) {
                     FORGE_WARN("model {}: clip '{}' has a malformed channel, skipped", m_path,

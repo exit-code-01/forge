@@ -37,7 +37,7 @@ namespace forge::anim {
 struct Skeleton {
     struct Node {
         std::string name;
-        int32_t parent = -1; // index into nodes; parents always precede children
+        int32_t parent = -1;         // index into nodes; parents always precede children
         glm::vec3 translation{0.0f}; // rest pose, local to the parent
         glm::quat rotation{1.0f, 0.0f, 0.0f, 0.0f};
         glm::vec3 scale{1.0f};
@@ -73,9 +73,9 @@ struct SkeletalClip {
 
 struct PlayOptions {
     bool loop = true;
-    float speed = 1.0f;     // 1 = authored rate; negative plays backwards
-    float fade = 0.2f;      // seconds to cross-fade from the current clip (0 = cut)
-    bool restart = false;   // replaying the CURRENT clip restarts it only if set
+    float speed = 1.0f;   // 1 = authored rate; negative plays backwards
+    float fade = 0.2f;    // seconds to cross-fade from the current clip (0 = cut)
+    bool restart = false; // replaying the CURRENT clip restarts it only if set
 };
 
 // Rest-pose palette (no clip applied): what an un-animated entity draws, and
@@ -99,9 +99,9 @@ public:
     [[nodiscard]] bool valid() const { return m_skeleton != nullptr; }
     [[nodiscard]] size_t jointCount() const;
     [[nodiscard]] bool playing() const { return m_current.clip >= 0; }
-    [[nodiscard]] float time() const { return m_current.time; }     // seconds into the clip
-    [[nodiscard]] float duration() const;                           // of the current clip
-    [[nodiscard]] std::string_view clipName() const;                // "" when none
+    [[nodiscard]] float time() const { return m_current.time; } // seconds into the clip
+    [[nodiscard]] float duration() const;                       // of the current clip
+    [[nodiscard]] std::string_view clipName() const;            // "" when none
 
 private:
     struct Layer {
@@ -121,7 +121,7 @@ private:
     std::shared_ptr<const Skeleton> m_skeleton;
     std::shared_ptr<const std::vector<SkeletalClip>> m_clips;
     Layer m_current;
-    Layer m_previous;       // fading OUT while m_current fades in
+    Layer m_previous; // fading OUT while m_current fades in
     float m_fadeTime = 0.0f;
     float m_fadeDuration = 0.0f;
     // Scratch, reused every frame (appendPalette is hot and const).

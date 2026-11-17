@@ -26,9 +26,7 @@ glm::quat slerpShortest(const glm::quat& a, glm::quat b, float t) {
     return (a * std::sin((1.0f - t) * theta) + b * std::sin(t * theta)) / sinTheta;
 }
 
-glm::vec3 interpolate(const glm::vec3& a, const glm::vec3& b, float t) {
-    return a + (b - a) * t;
-}
+glm::vec3 interpolate(const glm::vec3& a, const glm::vec3& b, float t) { return a + (b - a) * t; }
 glm::quat interpolate(const glm::quat& a, const glm::quat& b, float t) {
     return slerpShortest(a, b, t);
 }
@@ -91,13 +89,13 @@ Animator::Animator(std::shared_ptr<const Skeleton> skeleton,
 size_t Animator::jointCount() const { return m_skeleton ? m_skeleton->jointCount() : 0; }
 
 float Animator::duration() const {
-    return m_current.clip >= 0 ? (*m_clips)[static_cast<size_t>(m_current.clip)].duration
-                               : 0.0f;
+    return m_current.clip >= 0 ? (*m_clips)[static_cast<size_t>(m_current.clip)].duration : 0.0f;
 }
 
 std::string_view Animator::clipName() const {
-    return m_current.clip >= 0 ? std::string_view((*m_clips)[static_cast<size_t>(m_current.clip)].name)
-                               : std::string_view();
+    return m_current.clip >= 0
+               ? std::string_view((*m_clips)[static_cast<size_t>(m_current.clip)].name)
+               : std::string_view();
 }
 
 bool Animator::play(std::string_view clip, const PlayOptions& options) {
@@ -122,8 +120,8 @@ bool Animator::play(std::string_view clip, const PlayOptions& options) {
     const bool fade = options.fade > 0.0f && m_current.clip >= 0;
     if (fade) {
         // Interrupting a fade: keep whichever layer dominates the pose now.
-        const bool previousDominates = m_previous.clip >= 0 && m_fadeDuration > 0.0f &&
-                                       m_fadeTime < 0.5f * m_fadeDuration;
+        const bool previousDominates =
+            m_previous.clip >= 0 && m_fadeDuration > 0.0f && m_fadeTime < 0.5f * m_fadeDuration;
         m_previous = previousDominates ? m_previous : m_current;
         m_fadeTime = 0.0f;
         m_fadeDuration = options.fade;

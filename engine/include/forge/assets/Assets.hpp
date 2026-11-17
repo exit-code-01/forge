@@ -57,8 +57,8 @@ struct ImageData {
 // sandbox). Packs are often authored in centimetres or Z-up: fix it once
 // here instead of in every spawn call.
 struct ImportOptions {
-    float scale = 1.0f;          // uniform; 0.01 turns a centimetre pack into metres
-    glm::vec3 rotationDeg{0.0f}; // applied after scale, X then Y then Z (e.g. -90 0 0: Z-up)
+    float scale = 1.0f;            // uniform; 0.01 turns a centimetre pack into metres
+    glm::vec3 rotationDeg{0.0f};   // applied after scale, X then Y then Z (e.g. -90 0 0: Z-up)
     std::vector<std::string> hide; // node names whose meshes are skipped (accessory slots)
 };
 

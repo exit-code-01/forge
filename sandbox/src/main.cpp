@@ -132,8 +132,7 @@ void animDemo() {
     skeleton->nodes.push_back({"root", -1, glm::vec3(0.0f), glm::quat(1, 0, 0, 0), glm::vec3(1)});
     skeleton->nodes.push_back({"tip", 0, glm::vec3(0, 1, 0), glm::quat(1, 0, 0, 0), glm::vec3(1)});
     skeleton->jointNodes = {0, 1};
-    skeleton->inverseBind = {glm::mat4(1.0f),
-                             glm::translate(glm::mat4(1.0f), glm::vec3(0, -1, 0))};
+    skeleton->inverseBind = {glm::mat4(1.0f), glm::translate(glm::mat4(1.0f), glm::vec3(0, -1, 0))};
     auto clips = std::make_shared<std::vector<SkeletalClip>>(2);
     SkeletalClip& slide = (*clips)[0]; // root x: STEP 0 -> 1 -> 2
     slide.name = "slide";
@@ -179,7 +178,8 @@ void animDemo() {
     // Joint 1 maps the bind-space point (0,1,0)+(1,0,0) through the tip's
     // rotation: x = cos(22.5 deg) at 50 % of a fade toward 45 degrees.
     const glm::vec3 p = glm::vec3(sample()[1] * glm::vec4(1, 1, 0, 1));
-    expect(near(p.x, std::cos(glm::radians(22.5f))) && near(p.y, 1.0f + std::sin(glm::radians(22.5f))),
+    expect(near(p.x, std::cos(glm::radians(22.5f))) &&
+               near(p.y, 1.0f + std::sin(glm::radians(22.5f))),
            "cross-fade slerps halfway");
     animator.update(1.0f); // fade done; non-looping turn holds its end pose
     const glm::vec3 q = glm::vec3(sample()[1] * glm::vec4(1, 1, 0, 1));
@@ -279,8 +279,8 @@ glm::quat trsRotation(const TransformC& t) {
 // [stem] section per model — `scale = 0.01`, `rotate = -90 0 0` (degrees,
 // X then Y then Z), `hide = NodeA, NodeB` (accessory meshes to skip). Missing
 // file or section = identity import. Unknown keys are logged and ignored.
-std::unordered_map<std::string, forge::assets::ImportOptions> loadImportManifest(
-    const std::string& path) {
+std::unordered_map<std::string, forge::assets::ImportOptions>
+loadImportManifest(const std::string& path) {
     std::unordered_map<std::string, forge::assets::ImportOptions> out;
     std::ifstream file(path);
     std::string line;
@@ -436,8 +436,8 @@ void drawPrompt(ImDrawList* draw, ImVec2 at, const std::string& text) {
     const float x0 = at.x - total * 0.5f;
     draw->AddRectFilled({x0 - 8.0f, at.y - 5.0f}, {x0 + total + 8.0f, at.y + ks.y + 5.0f},
                         IM_COL32(0, 0, 0, 120), 5.0f);
-    draw->AddRect({x0, at.y - 2.0f}, {x0 + capW, at.y + ks.y + 2.0f},
-                  IM_COL32(255, 170, 60, 240), 3.0f, 0, 1.5f);
+    draw->AddRect({x0, at.y - 2.0f}, {x0 + capW, at.y + ks.y + 2.0f}, IM_COL32(255, 170, 60, 240),
+                  3.0f, 0, 1.5f);
     draw->AddText({x0 + (capW - ks.x) * 0.5f, at.y}, IM_COL32(255, 190, 90, 255), key.c_str());
     if (!rest.empty()) {
         draw->AddText({x0 + capW + 8.0f, at.y}, IM_COL32(255, 255, 255, 230), rest.c_str());
@@ -479,8 +479,8 @@ void drawMissionPanel(ImDrawList* draw, float right, float top, const std::strin
                                 2.0f);
             col = IM_COL32(120, 200, 140, 165);
         } else if (open) {
-            draw->AddRect({bx, by}, {bx + kBox, by + kBox}, IM_COL32(255, 255, 255, 210), 2.0f,
-                          0, 1.3f);
+            draw->AddRect({bx, by}, {bx + kBox, by + kBox}, IM_COL32(255, 255, 255, 210), 2.0f, 0,
+                          1.3f);
             col = IM_COL32(255, 255, 255, 225);
         }
         draw->AddText({bx + kIndent, y}, col, body(l).c_str());
@@ -578,9 +578,8 @@ int main() {
             forge::TextureCache modelTextures; // a pack's shared atlas uploads once
             for (const auto& entry : std::filesystem::directory_iterator("assets/models")) {
                 std::string ext = entry.path().extension().string();
-                std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char c) {
-                    return static_cast<char>(std::tolower(c));
-                });
+                std::transform(ext.begin(), ext.end(), ext.begin(),
+                               [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
                 if (ext != ".obj" && ext != ".gltf" && ext != ".glb") {
                     continue;
                 }
@@ -630,8 +629,7 @@ int main() {
         std::unordered_map<std::string, forge::ecs::Entity> entityByName;
         const auto spawnEntity = [&](std::string name, glm::vec3 position, glm::vec3 scale,
                                      uint32_t model, forge::TextureHandle texture,
-                                     glm::vec3 halfExtents, bool dynamic,
-                                     float restitution = 0.3f,
+                                     glm::vec3 halfExtents, bool dynamic, float restitution = 0.3f,
                                      const forge::SpawnOptions* options = nullptr) {
             const auto e = scene.create();
             entityByName[name] = e;
@@ -643,9 +641,8 @@ int main() {
             // Any named texture (not the checker fallback) is an override.
             mrc.textureOverride = texture.value != forge::Renderer::defaultTexture().value;
             if (model < models.size() && models[model].skeleton) {
-                scene.emplace<AnimatorC>(
-                    e, AnimatorC{forge::anim::Animator(models[model].skeleton,
-                                                       models[model].clips)});
+                scene.emplace<AnimatorC>(e, AnimatorC{forge::anim::Animator(models[model].skeleton,
+                                                                            models[model].clips)});
             }
             // Laser-textured things (beams, emitters) glow by default: the
             // beam is light, not a painted stick.
@@ -718,8 +715,8 @@ int main() {
         spawnEntity("Floor", {0.0f, -0.2f, 0.0f}, {14.0f, 0.4f, 14.0f}, cubeModel, concreteTexture,
                     {7.0f, 0.2f, 7.0f}, false);
         // North wall has the DOORWAY: two segments + a sliding Exit Door.
-        spawnEntity("Wall NW", {-4.25f, 1.6f, -7.2f}, {6.3f, 3.6f, 0.4f}, cubeModel, concreteTexture,
-                    {3.15f, 1.8f, 0.2f}, false);
+        spawnEntity("Wall NW", {-4.25f, 1.6f, -7.2f}, {6.3f, 3.6f, 0.4f}, cubeModel,
+                    concreteTexture, {3.15f, 1.8f, 0.2f}, false);
         spawnEntity("Wall NE", {4.25f, 1.6f, -7.2f}, {6.3f, 3.6f, 0.4f}, cubeModel, concreteTexture,
                     {3.15f, 1.8f, 0.2f}, false);
         spawnEntity("Wall N Top", {0.0f, 3.0f, -7.2f}, {2.2f, 0.8f, 0.4f}, cubeModel,
@@ -728,8 +725,8 @@ int main() {
         // OPEN door's faces never sit coplanar with "Wall N Top" (z-fighting).
         spawnEntity("Exit Door", {0.0f, 1.25f, -7.2f}, {2.2f, 2.5f, 0.32f}, meshOr("door"),
                     crateTexture, {1.1f, 1.25f, 0.16f}, false);
-        spawnEntity("Exit Pad", {0.0f, -0.2f, -8.6f}, {3.0f, 0.4f, 2.6f}, cubeModel, concreteTexture,
-                    {1.5f, 0.2f, 1.3f}, false);
+        spawnEntity("Exit Pad", {0.0f, -0.2f, -8.6f}, {3.0f, 0.4f, 2.6f}, cubeModel,
+                    concreteTexture, {1.5f, 0.2f, 1.3f}, false);
         // Glass pane just behind the exit door: throw a crate through it.
         spawnEntity("Glass", {0.0f, 1.05f, -7.9f}, {2.2f, 2.1f, 0.12f}, cubeModel, glassTexture,
                     {1.1f, 1.05f, 0.06f}, false);
@@ -912,8 +909,8 @@ int main() {
             const auto e = scene.create();
             scene.emplace<Name>(e, Name{"Box " + std::to_string(++scriptBoxCount)});
             scene.emplace<TransformC>(e).scale = halfExtents * 2.0f;
-            scene.emplace<MeshRendererC>(e, MeshRendererC{cubeModel, crateTexture, glm::vec3(0.0f),
-                                                          glm::vec3(1.0f), true});
+            scene.emplace<MeshRendererC>(
+                e, MeshRendererC{cubeModel, crateTexture, glm::vec3(0.0f), glm::vec3(1.0f), true});
             scene.emplace<BodyC>(e, BodyC{body, true});
         };
         // (scene.lua is loaded below, after ALL bindings are installed.)
@@ -1065,8 +1062,8 @@ int main() {
             if (a == nullptr) {
                 return false;
             }
-            const bool ok =
-                a->animator.play(clip, forge::anim::PlayOptions{o.loop, o.speed, o.fade, o.restart});
+            const bool ok = a->animator.play(
+                clip, forge::anim::PlayOptions{o.loop, o.speed, o.fade, o.restart});
             if (!ok) {
                 FORGE_WARN("anim.play: '{}' has no clip '{}'", name, clip);
             }
@@ -1082,8 +1079,7 @@ int main() {
             }
             return names;
         };
-        script.onAnimTime =
-            [&](const std::string& name) -> std::optional<std::pair<float, float>> {
+        script.onAnimTime = [&](const std::string& name) -> std::optional<std::pair<float, float>> {
             const auto e = findByName(name);
             const auto* a = scene.alive(e) ? scene.tryGet<AnimatorC>(e) : nullptr;
             if (a == nullptr || !a->animator.playing()) {
@@ -1368,7 +1364,7 @@ int main() {
                 player.holding = false; // no stale grabs across mode switches
                 player.chargePress = false;
                 player.chargeTime = 0.0f;
-                cursorForState();       // editor frees the cursor; play recaptures
+                cursorForState(); // editor frees the cursor; play recaptures
             }
 
             // Gameplay simulation runs only while actually playing. In the
@@ -1379,13 +1375,12 @@ int main() {
             const auto now = std::chrono::steady_clock::now();
             // Clamp: a hitch (window drag, breakpoint) must not hand gameplay a
             // multi-second step — timers and springs explode on those.
-            const float dt =
-                std::min(std::chrono::duration<float>(now - lastTime).count(), 0.1f);
+            const float dt = std::min(std::chrono::duration<float>(now - lastTime).count(), 0.1f);
             lastTime = now;
 
             forge::Camera camera{};
             camera.farPlane = viewDistance; // script-set (outdoor locations, ADR-031)
-            bool aimGrabbable = false; // crosshair affordance: "this will grab"
+            bool aimGrabbable = false;      // crosshair affordance: "this will grab"
             if (playMode) {
                 // ---- First-person: mouse-look + WASD through the capsule.
                 // Mouse-look only while actually playing — a frozen menu must
@@ -1480,8 +1475,8 @@ int main() {
                 // Head bob + landing dip + shake: the camera has a body now.
                 // Carrying damps the bob (a steady load reads as weight).
                 const float bobScale = player.bobAmp * (player.holding ? 0.55f : 1.0f);
-                glm::vec3 eye = physics.characterPosition() +
-                                glm::vec3(0.0f, 0.65f - player.landDip, 0.0f);
+                glm::vec3 eye =
+                    physics.characterPosition() + glm::vec3(0.0f, 0.65f - player.landDip, 0.0f);
                 eye.y += std::sin(player.bobPhase * 2.0f) * 0.022f * bobScale;
                 eye += right * (std::cos(player.bobPhase) * 0.012f * bobScale);
                 if (cameraShake > 0.002f) {
@@ -1557,8 +1552,7 @@ int main() {
                         const float sx = scene.get<TransformC>(itH->second).scale.x;
                         massFactor = std::clamp(0.5f / std::max(sx, 0.01f), 0.55f, 1.0f);
                     }
-                    physics.setLinearVelocity(player.held,
-                                              look * (player.throwSpeed * massFactor));
+                    physics.setLinearVelocity(player.held, look * (player.throwSpeed * massFactor));
                     player.holding = false;
                     player.chargePress = false;
                     player.chargeTime = 0.0f;
@@ -1637,8 +1631,8 @@ int main() {
                     // Sprint lean (week 12 juice): the glove drops and rolls
                     // while sprinting — the whole launch pass reads heavier.
                     const bool sprinting = walking && input.isKeyDown(forge::Key::LeftShift);
-                    sprintLean += ((sprinting ? 1.0f : 0.0f) - sprintLean) *
-                                  std::min(dt * 8.0f, 1.0f);
+                    sprintLean +=
+                        ((sprinting ? 1.0f : 0.0f) - sprintLean) * std::min(dt * 8.0f, 1.0f);
                     off.y -= 0.05f * sprintLean;
                     // Charge pose (week 12): wrist coils back with the charge;
                     // at full power the glove trembles — the kinesthetic tell
@@ -1769,10 +1763,9 @@ int main() {
                         const float alpha = std::clamp(toast.left / 0.4f, 0.0f, 1.0f);
                         const ImVec2 sz = ImGui::CalcTextSize(toast.text.c_str());
                         const ImVec2 at{(io.DisplaySize.x - sz.x) * 0.5f, toastY};
-                        draw->AddRectFilled({at.x - 10.0f, at.y - 5.0f},
-                                            {at.x + sz.x + 10.0f, at.y + sz.y + 5.0f},
-                                            IM_COL32(10, 30, 50, static_cast<int>(150 * alpha)),
-                                            4.0f);
+                        draw->AddRectFilled(
+                            {at.x - 10.0f, at.y - 5.0f}, {at.x + sz.x + 10.0f, at.y + sz.y + 5.0f},
+                            IM_COL32(10, 30, 50, static_cast<int>(150 * alpha)), 4.0f);
                         draw->AddText(at, IM_COL32(150, 215, 255, static_cast<int>(240 * alpha)),
                                       toast.text.c_str());
                         toastY += sz.y + 14.0f;
@@ -2109,11 +2102,11 @@ int main() {
                         }
                     }
                     if (mr.model < models.size()) {
-                        forge::appendModelDraws(
-                            items, models[mr.model], model,
-                            forge::ModelLook{mr.texture, mr.textureOverride, emissive, mr.tint,
-                                             mr.roughness, mr.metallic},
-                            jointOffset);
+                        forge::appendModelDraws(items, models[mr.model], model,
+                                                forge::ModelLook{mr.texture, mr.textureOverride,
+                                                                 emissive, mr.tint, mr.roughness,
+                                                                 mr.metallic},
+                                                jointOffset);
                     }
                 });
                 // Local lights: nearest-first to the camera, capped.
@@ -2127,12 +2120,12 @@ int main() {
                     return glm::dot(d, d);
                 };
                 if (frameLights.size() > forge::Renderer::kMaxPointLights) {
-                    std::partial_sort(
-                        frameLights.begin(),
-                        frameLights.begin() + forge::Renderer::kMaxPointLights, frameLights.end(),
-                        [&](const forge::PointLight& a, const forge::PointLight& b) {
-                            return distSq(a) < distSq(b);
-                        });
+                    std::partial_sort(frameLights.begin(),
+                                      frameLights.begin() + forge::Renderer::kMaxPointLights,
+                                      frameLights.end(),
+                                      [&](const forge::PointLight& a, const forge::PointLight& b) {
+                                          return distSq(a) < distSq(b);
+                                      });
                     frameLights.resize(forge::Renderer::kMaxPointLights);
                 }
                 renderer->setPointLights(frameLights);

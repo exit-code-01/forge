@@ -10,17 +10,16 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # The tree does not yet conform to .clang-format (known debt), so this job
-  # reports but does not gate. Flip continue-on-error to false once the tree
-  # has been reformatted.
+  # Gating: engine/ and sandbox/ C++ must match .clang-format. clang-format is
+  # pinned so the check does not drift when a new release changes the style.
+  # To reformat: bump the pin, run clang-format -i on the same file set, commit.
   format:
-    name: format (advisory)
+    name: format
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
-      - run: pip install clang-format
+      - run: pip install clang-format==23.1.5
       - name: Check formatting
         run: |
           find engine sandbox \( -name '*.cpp' -o -name '*.hpp' \) -print0 \
@@ -58,8 +57,6 @@ jobs:
         os: [ubuntu-latest, windows-latest]
         include:
           - os: macos-latest
-            experimental: true
-    continue-on-error: ${{ matrix.experimental == true }}
 
     steps:
       - uses: actions/checkout@v4

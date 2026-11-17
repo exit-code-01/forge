@@ -145,9 +145,9 @@ public:
     // clear its velocity so the player doesn't inherit fall speed on respawn.
     void setCharacterPosition(const glm::vec3& position);
 
-    // Week 2: DYNAMIC bodies (kinematic platforms excluded) whose bounds overlap an axis-aligned box.
-    // The pressure-plate primitive: cheap broadphase query, main thread,
-    // no contact-listener threading — polled from Lua each frame.
+    // Week 2: DYNAMIC bodies (kinematic platforms excluded) whose bounds overlap an axis-aligned
+    // box. The pressure-plate primitive: cheap broadphase query, main thread, no contact-listener
+    // threading — polled from Lua each frame.
     [[nodiscard]] std::vector<BodyId> overlapBox(const glm::vec3& center,
                                                  const glm::vec3& halfExtents) const;
 

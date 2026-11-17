@@ -74,8 +74,8 @@ struct AnimPlayOptions {
 // texture in assets/textures (equirectangular); "" = the procedural gradient.
 struct SkyOptions {
     std::optional<glm::vec3> zenith, horizon, ground; // linear HDR rgb
-    std::optional<float> sunSize;      // degrees (angular radius); 0 hides the disc
-    std::optional<float> sunIntensity; // x key-light colour
+    std::optional<float> sunSize;                     // degrees (angular radius); 0 hides the disc
+    std::optional<float> sunIntensity;                // x key-light colour
     std::optional<float> sunHalo;
     std::string texture;
     std::optional<float> textureIntensity;
@@ -145,7 +145,7 @@ public:
     std::function<bool(const std::string& name)> onEntityExists;
     // Body <-> name: raycasts return body ids; puzzles think in names. Also
     // retires the fragile "overlap a box and hope it is unambiguous" lookup.
-    std::function<std::string(uint32_t body)> onBodyName; // "" if unknown
+    std::function<std::string(uint32_t body)> onBodyName;      // "" if unknown
     std::function<uint32_t(const std::string& name)> onBodyId; // 0 if none
     // ADR-031: is this name in the model registry (dressing that degrades
     // when an asset fails to import, instead of drawing the cube fallback)?
@@ -226,9 +226,9 @@ public:
     std::function<void(const std::string& title, const std::vector<std::string>& lines)>
         onSetMission;
     std::function<void(const std::string& speaker, const std::string& text, float seconds)>
-        onSay;                                     // one subtitle line, bottom-centre
-    std::function<void(float alpha)> onSetFade;    // 0..1 black over the scene
-    std::function<bool()> onIsDev;                 // FORGE_DEV set (dev tools)
+        onSay;                                           // one subtitle line, bottom-centre
+    std::function<void(float alpha)> onSetFade;          // 0..1 black over the scene
+    std::function<bool()> onIsDev;                       // FORGE_DEV set (dev tools)
     std::function<void(float meters)> onSetViewDistance; // camera far plane
     std::function<void(float yawDeg, float pitchDeg)> onSetPlayerYaw; // 0 = facing -z
     // forge.scene.setPosition/getPosition(name), forge.player.position(),

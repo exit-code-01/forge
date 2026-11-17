@@ -47,9 +47,8 @@ Model uploadModel(Renderer& renderer, const assets::ModelData& data, std::string
                                  : renderer.addMesh(submesh.mesh.vertices, submesh.mesh.indices);
         part.authored = material.authored;
         part.tint = glm::vec3(material.baseColor);
-        part.texture = material.image >= 0
-                           ? imageTextures.at(static_cast<size_t>(material.image))
-                           : Renderer::whiteTexture();
+        part.texture = material.image >= 0 ? imageTextures.at(static_cast<size_t>(material.image))
+                                           : Renderer::whiteTexture();
         model.parts.push_back(part);
         if (!part.skinned) { // retained for mesh colliders (ADR-032)
             const auto base = static_cast<uint32_t>(model.collisionVertices.size());

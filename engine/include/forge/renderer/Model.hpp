@@ -41,10 +41,10 @@ struct ModelData;
 
 struct ModelPart {
     MeshHandle mesh;
-    TextureHandle texture;  // the material's own (Renderer::whiteTexture() if untextured)
-    glm::vec3 tint{1.0f};   // material base colour, linear
-    bool authored = false;  // false: the entity's texture shows (see the rule above)
-    bool skinned = false;   // mesh carries a skin stream (animated models)
+    TextureHandle texture; // the material's own (Renderer::whiteTexture() if untextured)
+    glm::vec3 tint{1.0f};  // material base colour, linear
+    bool authored = false; // false: the entity's texture shows (see the rule above)
+    bool skinned = false;  // mesh carries a skin stream (animated models)
 };
 
 struct Model {
@@ -80,8 +80,8 @@ using TextureCache = std::unordered_map<std::string, TextureHandle>;
 // Uploads every part's mesh and every image (once per model; images shared
 // between materials upload once, and once per `cache` if one is given).
 // Load-time API, like addMesh.
-[[nodiscard]] Model uploadModel(Renderer& renderer, const assets::ModelData& data,
-                                std::string name, TextureCache* cache = nullptr);
+[[nodiscard]] Model uploadModel(Renderer& renderer, const assets::ModelData& data, std::string name,
+                                TextureCache* cache = nullptr);
 
 // One mesh as a one-part, material-less model (the built-in cube, sparks).
 [[nodiscard]] Model singleMeshModel(MeshHandle mesh, std::string name);

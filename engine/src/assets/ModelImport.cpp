@@ -140,8 +140,7 @@ ModelData loadModel(const std::string& path, const ImportOptions& options) {
                size.x, size.y, size.z);
     if (model.skeleton) {
         FORGE_INFO("model animated: {} ({} nodes, {} joints, {} clips)", path,
-                   model.skeleton->nodes.size(), model.skeleton->jointCount(),
-                   model.clips.size());
+                   model.skeleton->nodes.size(), model.skeleton->jointCount(), model.clips.size());
     }
     return model;
 }

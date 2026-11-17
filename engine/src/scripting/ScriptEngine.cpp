@@ -51,8 +51,8 @@ void logScriptError(const char* context, const sol::error& err) {
 
 struct ScriptEngine::Impl {
     sol::state lua;
-    sol::protected_function onUpdate; // refreshed after every successful load
-    bool updateBroken = false;        // latch: log a runtime error ONCE, not per frame
+    sol::protected_function onUpdate;   // refreshed after every successful load
+    bool updateBroken = false;          // latch: log a runtime error ONCE, not per frame
     std::vector<std::string> includes;  // unique, in first-include order
     std::vector<std::string> including; // the include stack (cycle guard)
 };
@@ -62,16 +62,14 @@ ScriptEngine::ScriptEngine() : m_impl(std::make_unique<Impl>()) {
     lua.open_libraries(sol::lib::base, sol::lib::math, sol::lib::string, sol::lib::table);
 
     // vec3: scripts speak the same math the engine does.
-    lua.new_usertype<glm::vec3>("vec3", sol::call_constructor,
-                                sol::constructors<glm::vec3(float, float, float)>(), "x",
-                                &glm::vec3::x, "y", &glm::vec3::y, "z", &glm::vec3::z,
-                                sol::meta_function::addition,
-                                [](const glm::vec3& a, const glm::vec3& b) { return a + b; },
-                                sol::meta_function::subtraction,
-                                [](const glm::vec3& a, const glm::vec3& b) { return a - b; },
-                                sol::meta_function::multiplication,
-                                [](const glm::vec3& a, float k) { return a * k; }, "length",
-                                [](const glm::vec3& a) { return glm::length(a); });
+    lua.new_usertype<glm::vec3>(
+        "vec3", sol::call_constructor, sol::constructors<glm::vec3(float, float, float)>(), "x",
+        &glm::vec3::x, "y", &glm::vec3::y, "z", &glm::vec3::z, sol::meta_function::addition,
+        [](const glm::vec3& a, const glm::vec3& b) { return a + b; },
+        sol::meta_function::subtraction,
+        [](const glm::vec3& a, const glm::vec3& b) { return a - b; },
+        sol::meta_function::multiplication, [](const glm::vec3& a, float k) { return a * k; },
+        "length", [](const glm::vec3& a) { return glm::length(a); });
 
     sol::table forge = lua.create_named_table("forge");
     forge.set_function("log", [](const std::string& message) { FORGE_INFO("[lua] {}", message); });
@@ -88,8 +86,7 @@ ScriptEngine::ScriptEngine() : m_impl(std::make_unique<Impl>()) {
                 return false;
             }
         }
-        if (std::find(impl->includes.begin(), impl->includes.end(), path) ==
-            impl->includes.end()) {
+        if (std::find(impl->includes.begin(), impl->includes.end(), path) == impl->includes.end()) {
             impl->includes.push_back(path); // watched even if this load fails
         }
         impl->including.push_back(path);
@@ -238,37 +235,36 @@ void ScriptEngine::bindScene() {
     });
     // spawn(..., dynamic[, mesh]): mesh is optional so every existing call
     // site keeps meaning "unit cube" (ADR-027 — the model registry seam).
-    sceneTable.set_function("spawn", [this](const std::string& name, const glm::vec3& position,
-                                            const glm::vec3& scale, const glm::vec3& halfExtents,
-                                            const std::string& texture, bool dynamic,
-                                            sol::optional<std::string> mesh,
-                                            sol::optional<sol::table> opts) {
-        if (!onSpawnEntity) {
-            return;
-        }
-        SpawnOptions options;
-        if (opts) {
-            options.kinematic = opts->get_or("kinematic", false);
-            options.lockRotation = opts->get_or("lockRotation", false);
-            options.friction = opts->get_or("friction", options.friction);
-            options.density = opts->get_or("density", options.density);
-            options.restitution = opts->get_or("restitution", options.restitution);
-            options.yawDeg = opts->get_or("yaw", options.yawDeg);
-            if (const sol::optional<float> r = (*opts)["roughness"]) { // ADR-033
-                options.roughness = *r;
+    sceneTable.set_function(
+        "spawn", [this](const std::string& name, const glm::vec3& position, const glm::vec3& scale,
+                        const glm::vec3& halfExtents, const std::string& texture, bool dynamic,
+                        sol::optional<std::string> mesh, sol::optional<sol::table> opts) {
+            if (!onSpawnEntity) {
+                return;
             }
-            if (const sol::optional<float> m = (*opts)["metallic"]) {
-                options.metallic = *m;
+            SpawnOptions options;
+            if (opts) {
+                options.kinematic = opts->get_or("kinematic", false);
+                options.lockRotation = opts->get_or("lockRotation", false);
+                options.friction = opts->get_or("friction", options.friction);
+                options.density = opts->get_or("density", options.density);
+                options.restitution = opts->get_or("restitution", options.restitution);
+                options.yawDeg = opts->get_or("yaw", options.yawDeg);
+                if (const sol::optional<float> r = (*opts)["roughness"]) { // ADR-033
+                    options.roughness = *r;
+                }
+                if (const sol::optional<float> m = (*opts)["metallic"]) {
+                    options.metallic = *m;
+                }
+                const std::string collider = opts->get_or("collider", std::string("box"));
+                options.meshCollider = collider == "mesh";
+                if (collider != "box" && collider != "mesh") {
+                    FORGE_WARN("spawn '{}': unknown collider '{}', using box", name, collider);
+                }
             }
-            const std::string collider = opts->get_or("collider", std::string("box"));
-            options.meshCollider = collider == "mesh";
-            if (collider != "box" && collider != "mesh") {
-                FORGE_WARN("spawn '{}': unknown collider '{}', using box", name, collider);
-            }
-        }
-        onSpawnEntity(name, position, scale, halfExtents, texture, dynamic, mesh.value_or(""),
-                      options);
-    });
+            onSpawnEntity(name, position, scale, halfExtents, texture, dynamic, mesh.value_or(""),
+                          options);
+        });
     // ---- Upgrade pass (ADR-029): emissive/tint, body<->name, existence.
     sceneTable.set_function("setEmissive", [this](const std::string& name, const glm::vec3& e) {
         if (onSetEntityEmissive) {
@@ -298,9 +294,8 @@ void ScriptEngine::bindScene() {
     sceneTable.set_function("bodyName", [this](uint32_t body) {
         return onBodyName ? onBodyName(body) : std::string();
     });
-    sceneTable.set_function("bodyId", [this](const std::string& name) {
-        return onBodyId ? onBodyId(name) : 0U;
-    });
+    sceneTable.set_function(
+        "bodyId", [this](const std::string& name) { return onBodyId ? onBodyId(name) : 0U; });
     sceneTable.set_function("has_model", [this](const std::string& model) {
         return onHasModel ? onHasModel(model) : false;
     });
@@ -389,9 +384,8 @@ void ScriptEngine::bindScene() {
             onSaveValue(key, value);
         }
     });
-    gameTable.set_function("load", [this](const std::string& key) {
-        return onLoadValue ? onLoadValue(key) : 0.0;
-    });
+    gameTable.set_function(
+        "load", [this](const std::string& key) { return onLoadValue ? onLoadValue(key) : 0.0; });
     // forge.game.dev() -> bool: FORGE_DEV is set (dev-only verbs, ADR-031).
     gameTable.set_function("dev", [this]() { return onIsDev ? onIsDev() : false; });
 
@@ -569,16 +563,16 @@ void ScriptEngine::bindScene() {
     animTable.set_function("clips", [this](const std::string& model) {
         return sol::as_table(onAnimClips ? onAnimClips(model) : std::vector<std::string>{});
     });
-    animTable.set_function(
-        "time", [this](const std::string& entity)
-                    -> std::tuple<sol::optional<float>, sol::optional<float>> {
-            if (onAnimTime) {
-                if (const auto t = onAnimTime(entity)) {
-                    return {t->first, t->second};
-                }
-            }
-            return {sol::nullopt, sol::nullopt};
-        });
+    animTable.set_function("time",
+                           [this](const std::string& entity)
+                               -> std::tuple<sol::optional<float>, sol::optional<float>> {
+                               if (onAnimTime) {
+                                   if (const auto t = onAnimTime(entity)) {
+                                       return {t->first, t->second};
+                                   }
+                               }
+                               return {sol::nullopt, sol::nullopt};
+                           });
 }
 
 void ScriptEngine::bindAudio(Audio& audio) {
@@ -608,14 +602,14 @@ void ScriptEngine::bindFx(fx::ParticleEmitter& emitter) {
     sol::table forge = m_impl->lua["forge"];
     sol::table fxTable = forge.create_named("fx");
     // burst(origin, count[, color]): color is emissive HDR radiance.
-    fxTable.set_function("burst", [&emitter](const glm::vec3& origin, int count,
-                                             sol::optional<glm::vec3> color) {
-        if (color) {
-            emitter.burst(origin, count, *color);
-        } else {
-            emitter.burst(origin, count);
-        }
-    });
+    fxTable.set_function(
+        "burst", [&emitter](const glm::vec3& origin, int count, sol::optional<glm::vec3> color) {
+            if (color) {
+                emitter.burst(origin, count, *color);
+            } else {
+                emitter.burst(origin, count);
+            }
+        });
 }
 
 bool ScriptEngine::runFile(const std::string& path) {

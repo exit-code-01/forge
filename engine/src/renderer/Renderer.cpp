@@ -79,7 +79,6 @@ constexpr float kBloomKnee = 0.5f;      // soft-knee half-width around the thres
 // setBloom(0.6) gives a 3-pixel, radiance-6 laser beam a clear soft halo.
 constexpr float kBloomGain = 2.0f;
 
-
 // Hard cap on live textures — sizes the descriptor pool. Raised from 64 for
 // imported model packs (ADR-030); exhaustion falls back to white, logged.
 // Pool growth (or bindless) is the next step if packs outgrow it.
@@ -112,7 +111,7 @@ struct FrameUbo {
     // Cascade tail (ADR-033): read only by mesh.frag, which declares the
     // whole block. The shadow pass itself takes its matrix per draw.
     glm::mat4 cascadeViewProj[kShadowCascades]; // world -> cascade light clip
-    glm::vec4 cascadeTexel; // xyz: world size of one texel per cascade
+    glm::vec4 cascadeTexel;                     // xyz: world size of one texel per cascade
     glm::vec4 shadowParams; // x: fade start, y: fade end (m), z: blend band, w: normal offset
 };
 static_assert(sizeof(FrameUbo) ==
@@ -341,8 +340,8 @@ Cascade fitCascade(const glm::mat4& lightRot, glm::vec3 camPos, glm::vec3 camFor
     out.zBottom = out.center.z - out.radius;
     // glm::ortho (RH, zero-to-one): view z = -near -> 0, -far -> 1.
     const glm::mat4 proj =
-        glm::ortho(out.center.x - out.radius, out.center.x + out.radius,
-                   out.center.y - out.radius, out.center.y + out.radius, -out.zTop, -out.zBottom);
+        glm::ortho(out.center.x - out.radius, out.center.x + out.radius, out.center.y - out.radius,
+                   out.center.y + out.radius, -out.zTop, -out.zBottom);
     out.viewProj = proj * lightRot;
     return out;
 }
@@ -442,7 +441,7 @@ struct Renderer::Impl {
 
     VkPipelineLayout pipelineLayout = VK_NULL_HANDLE;
     VkPipeline pipeline = VK_NULL_HANDLE;
-    VkPipeline shadowPipeline = VK_NULL_HANDLE; // depth-only, light's POV
+    VkPipeline shadowPipeline = VK_NULL_HANDLE;        // depth-only, light's POV
     VkPipeline skinnedPipeline = VK_NULL_HANDLE;       // ADR-030: + SkinVertex stream
     VkPipeline skinnedShadowPipeline = VK_NULL_HANDLE; // ...and its shadow twin
     VkPipeline skyPipeline = VK_NULL_HANDLE;           // ADR-030: fullscreen, behind all
@@ -751,8 +750,7 @@ struct VertexInputDesc {
             attributes[count++] = {2, 0, VK_FORMAT_R32G32_SFLOAT, offsetof(Vertex, uv)};
         }
         if (skinned) {
-            attributes[count++] = {3, 1, VK_FORMAT_R16G16B16A16_UINT,
-                                   offsetof(SkinVertex, joints)};
+            attributes[count++] = {3, 1, VK_FORMAT_R16G16B16A16_UINT, offsetof(SkinVertex, joints)};
             attributes[count++] = {4, 1, VK_FORMAT_R32G32B32A32_SFLOAT,
                                    offsetof(SkinVertex, weights)};
         }
@@ -771,8 +769,9 @@ struct VertexInputDesc {
 VkPipeline Renderer::Impl::makeScenePipeline(bool skinned) const {
     const VkDevice dev = device->device();
     const VkShaderModule vert =
-        skinned ? makeShaderModule(dev, shaders::kMeshSkinnedVert, sizeof(shaders::kMeshSkinnedVert))
-                : makeShaderModule(dev, shaders::kMeshVert, sizeof(shaders::kMeshVert));
+        skinned
+            ? makeShaderModule(dev, shaders::kMeshSkinnedVert, sizeof(shaders::kMeshSkinnedVert))
+            : makeShaderModule(dev, shaders::kMeshVert, sizeof(shaders::kMeshVert));
     const VkShaderModule frag =
         makeShaderModule(dev, shaders::kMeshFrag, sizeof(shaders::kMeshFrag));
 
@@ -1208,8 +1207,8 @@ void Renderer::Impl::createPostResources() {
 
     bloomDownPipeline = makePostPipeline(shaders::kBloomDownFrag, sizeof(shaders::kBloomDownFrag),
                                          kHdrFormat, false);
-    bloomUpPipeline = makePostPipeline(shaders::kBloomUpFrag, sizeof(shaders::kBloomUpFrag),
-                                       kHdrFormat, true);
+    bloomUpPipeline =
+        makePostPipeline(shaders::kBloomUpFrag, sizeof(shaders::kBloomUpFrag), kHdrFormat, true);
     // The swapchain format does not change across recreation in practice
     // (same assumption the UI pipeline makes); if it ever does, rebuild this.
     compositePipeline = makePostPipeline(shaders::kCompositeFrag, sizeof(shaders::kCompositeFrag),
@@ -1405,28 +1404,24 @@ void Renderer::Impl::recordBloom(VkCommandBuffer cmd) const {
         // image bound to its sampler must still be in the layout the
         // descriptor promises. Contents stay undefined and unread.
         vkutil::transitionImage(cmd, bloomImage, VK_IMAGE_ASPECT_COLOR_BIT, 0, 1,
-                                VK_IMAGE_LAYOUT_UNDEFINED,
-                                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, kPrevStages, kPrevAccess,
-                                VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
+                                VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                                kPrevStages, kPrevAccess, VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
                                 VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
         return;
     }
 
     // Every mip is fully overwritten by its downsample: discard old contents.
-    vkutil::transitionImage(cmd, bloomImage, VK_IMAGE_ASPECT_COLOR_BIT, 0, mipCount,
-                            VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-                            kPrevStages, kPrevAccess,
-                            VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
-                            VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT);
+    vkutil::transitionImage(
+        cmd, bloomImage, VK_IMAGE_ASPECT_COLOR_BIT, 0, mipCount, VK_IMAGE_LAYOUT_UNDEFINED,
+        VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, kPrevStages, kPrevAccess,
+        VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT);
 
     const auto toSampled = [&](uint32_t mip) {
-        vkutil::transitionImage(cmd, bloomImage, VK_IMAGE_ASPECT_COLOR_BIT, mip, 1,
-                                VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-                                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                                VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
-                                VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
-                                VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
-                                VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+        vkutil::transitionImage(
+            cmd, bloomImage, VK_IMAGE_ASPECT_COLOR_BIT, mip, 1,
+            VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+            VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
+            VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
     };
     // One fullscreen draw into bloom mip `dstMip`, sampling `sourceSet`.
     const auto drawInto = [&](uint32_t dstMip, VkAttachmentLoadOp loadOp, VkDescriptorSet sourceSet,
@@ -1478,14 +1473,12 @@ void Renderer::Impl::recordBloom(VkCommandBuffer cmd) const {
     // Up: mip i += tent(mip i+1), smallest first.
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, bloomUpPipeline);
     for (uint32_t i = mipCount - 1; i-- > 0;) {
-        vkutil::transitionImage(cmd, bloomImage, VK_IMAGE_ASPECT_COLOR_BIT, i, 1,
-                                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                                VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-                                VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
-                                VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
-                                VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
-                                VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT |
-                                    VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT);
+        vkutil::transitionImage(
+            cmd, bloomImage, VK_IMAGE_ASPECT_COLOR_BIT, i, 1,
+            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+            VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
+            VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+            VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT);
         const PostPush push{glm::vec4(texelSize(bloomExtents[i + 1]), 0.0f, 0.0f)};
         drawInto(i, VK_ATTACHMENT_LOAD_OP_LOAD, bloomSets[i + 1], push);
         toSampled(i);
@@ -1715,9 +1708,8 @@ void Renderer::Impl::record(VkCommandBuffer cmd, uint32_t imageIndex, uint32_t f
     bound = skyPipeline;
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout, 0, 1,
                             &frameSets[frame], 0, nullptr);
-    const uint32_t panorama = sky.panorama.value < textures.size()
-                                  ? sky.panorama.value
-                                  : Renderer::whiteTexture().value;
+    const uint32_t panorama =
+        sky.panorama.value < textures.size() ? sky.panorama.value : Renderer::whiteTexture().value;
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout, 1, 1,
                             &textures[panorama].set, 0, nullptr);
     vkCmdDraw(cmd, 3, 1, 0, 0);
@@ -1731,8 +1723,7 @@ void Renderer::Impl::record(VkCommandBuffer cmd, uint32_t imageIndex, uint32_t f
             bindFor(skinned, pipeline, skinnedPipeline);
             // Set 1 rebinds per item; sorting draws by texture is the P8-era
             // optimization this layout is already shaped for.
-            const uint32_t texture =
-                item.texture.value < textures.size() ? item.texture.value : 0u;
+            const uint32_t texture = item.texture.value < textures.size() ? item.texture.value : 0u;
             vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout, 1, 1,
                                     &textures[texture].set, 0, nullptr);
             drawItemMesh(item, skinned, item.model);
@@ -1741,12 +1732,11 @@ void Renderer::Impl::record(VkCommandBuffer cmd, uint32_t imageIndex, uint32_t f
     vkCmdEndRendering(cmd);
 
     // Scene done: the post chain samples it from here on.
-    transitionImage(cmd, hdrImage, VK_IMAGE_ASPECT_COLOR_BIT,
-                    VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-                    VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                    VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
-                    VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT, VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
-                    VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+    transitionImage(
+        cmd, hdrImage, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+        VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+        VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT, VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
+        VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
 
     // ---- Pass 3: bloom chain (leaves bloom mip 0 sampleable either way).
     recordBloom(cmd);
@@ -1782,8 +1772,7 @@ void Renderer::Impl::record(VkCommandBuffer cmd, uint32_t imageIndex, uint32_t f
                             0, nullptr);
     // Every mip of the chain was summed into mip 0; dividing by the count
     // keeps "intensity" meaning the same thing at any window size.
-    const float bloomStrength =
-        bloomIntensity * kBloomGain / static_cast<float>(bloomViews.size());
+    const float bloomStrength = bloomIntensity * kBloomGain / static_cast<float>(bloomViews.size());
     const PostPush compositePush{glm::vec4(1.0f / static_cast<float>(bloomExtents[0].width),
                                            1.0f / static_cast<float>(bloomExtents[0].height),
                                            bloomStrength, exposure)};
@@ -1933,10 +1922,10 @@ void Renderer::Impl::buildMeshEntry(std::span<const Vertex> vertices,
         if (skin.size() != vertices.size()) {
             throw std::runtime_error("skinned mesh: skin stream must match the vertex count");
         }
-        out.skinBuffer = GpuBuffer(*device, skin.size_bytes(),
-                                   VK_BUFFER_USAGE_TRANSFER_DST_BIT |
-                                       VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
-                                   VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+        out.skinBuffer =
+            GpuBuffer(*device, skin.size_bytes(),
+                      VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+                      VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
         uploadToBuffer(*device, commandPool, out.skinBuffer.handle(), skin.data(),
                        skin.size_bytes());
         for (const SkinVertex& v : skin) {
@@ -2116,10 +2105,10 @@ void Renderer::drawFrame(const Camera& camera, std::span<const DrawItem> items,
     // script's colours by ambientWeight (0 = exactly the default, ADR-033).
     const glm::vec3 defaultSky = kAmbientSkyBase + impl.lightColor * kAmbientSkyFromKey;
     const glm::vec3 defaultGround = kAmbientGroundBase + impl.lightColor * kAmbientGroundFromKey;
-    ubo.ambientSky = glm::vec4(
-        impl.ambientWeight > 0.0f ? glm::mix(defaultSky, impl.ambientSky, impl.ambientWeight)
-                                  : defaultSky,
-        0.0f);
+    ubo.ambientSky = glm::vec4(impl.ambientWeight > 0.0f
+                                   ? glm::mix(defaultSky, impl.ambientSky, impl.ambientWeight)
+                                   : defaultSky,
+                               0.0f);
     ubo.ambientGround = glm::vec4(
         impl.ambientWeight > 0.0f ? glm::mix(defaultGround, impl.ambientGround, impl.ambientWeight)
                                   : defaultGround,
@@ -2133,16 +2122,16 @@ void Renderer::drawFrame(const Camera& camera, std::span<const DrawItem> items,
     // Sky tail (ADR-030). The sun disc tracks the key light: its direction
     // AND its colour (setLighting), scaled by the sky's sunIntensity.
     const Sky& sky = impl.sky;
-    const bool panorama = sky.panorama.value != Sky::kNoPanorama &&
-                          sky.panorama.value < impl.textures.size();
+    const bool panorama =
+        sky.panorama.value != Sky::kNoPanorama && sky.panorama.value < impl.textures.size();
     ubo.invViewProj = glm::inverse(ubo.viewProj);
     ubo.skyZenith = glm::vec4(sky.zenith, 0.0f);
     ubo.skyHorizon = glm::vec4(sky.horizon, glm::radians(sky.panoramaYaw));
     ubo.skyGround = glm::vec4(sky.ground, 0.0f);
     ubo.skySun = glm::vec4(impl.lightColor * sky.sunIntensity,
                            sky.sunSize > 0.0f ? std::cos(glm::radians(sky.sunSize)) : 2.0f);
-    ubo.skyParams = glm::vec4(panorama ? 1.0f : 0.0f, sky.panoramaIntensity, camera.farPlane,
-                              sky.sunHalo);
+    ubo.skyParams =
+        glm::vec4(panorama ? 1.0f : 0.0f, sky.panoramaIntensity, camera.farPlane, sky.sunHalo);
     // Cascade tail (ADR-033). The fade scales down with a near far plane, so
     // shadows still fade out before the geometry ends.
     for (uint32_t c = 0; c < kShadowCascades; ++c) {

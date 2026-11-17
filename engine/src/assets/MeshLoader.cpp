@@ -79,8 +79,8 @@ ModelData loadObjModel(const std::string& path, const ImportOptions& options) {
     const aiScene* scene = importer.ReadFile(path, kImportFlags);
     if (scene == nullptr || (scene->mFlags & AI_SCENE_FLAGS_INCOMPLETE) != 0 ||
         scene->mNumMeshes == 0 || scene->mRootNode == nullptr) {
-        throw std::runtime_error("model import failed: " + path + " (" +
-                                 importer.GetErrorString() + ")");
+        throw std::runtime_error("model import failed: " + path + " (" + importer.GetErrorString() +
+                                 ")");
     }
 
     ModelData out;
